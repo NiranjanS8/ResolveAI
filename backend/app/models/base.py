@@ -30,6 +30,10 @@ class TicketStatus(str, enum.Enum):
     ESCALATED = "escalated"
     RESOLVED = "resolved"
 
+    @staticmethod
+    def values(_cls) -> list[str]:
+        return [e.value for e in TicketStatus]
+
 
 class Intent(str, enum.Enum):
     GENERAL = "general"
@@ -41,6 +45,10 @@ class Intent(str, enum.Enum):
     PASSWORD_RESET = "password_reset"
     CANCELLATION = "cancellation"
 
+    @staticmethod
+    def values(_cls) -> list[str]:
+        return [e.value for e in Intent]
+
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -50,12 +58,12 @@ class Ticket(Base):
     subject = Column(String(500), nullable=False)
     body = Column(Text, nullable=False)
     status = Column(
-        Enum(TicketStatus, name="ticket_status"),
+        Enum(TicketStatus, name="ticket_status", values_callable=TicketStatus.values, native_enum=False),
         default=TicketStatus.NEW,
         nullable=False,
         index=True,
     )
-    intent = Column(Enum(Intent, name="intent"), nullable=True, index=True)
+    intent = Column(Enum(Intent, name="intent", values_callable=Intent.values, native_enum=False), nullable=True, index=True)
     urgency = Column(String(50), nullable=True)
     sentiment = Column(String(50), nullable=True)
     confidence = Column(String(50), nullable=True)
