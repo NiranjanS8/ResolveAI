@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-base: #F1F2F0;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-surface-hover: #E8EAE6;
+  --color-border-hairline: #DDE1DE;
+  --color-text-primary: #1B1F23;
+  --color-text-secondary: #5B6470;
+  --color-accent: #3C5B6E;
+  --color-accent-hover: #2E4757;
+  --color-status-high: #5C7A5C;
+  --color-status-medium: #B08968;
+  --color-status-low: #9C5B4D;
+  --color-status-high-bg: #EAF0E9;
+  --color-status-medium-bg: #F5EDE6;
+  --color-status-low-bg: #F3E7E4;
+  --radius: 4px;
+}
+
+@layer base {
+  :root {
+    --bg-base: #F1F2F0;
+    --bg-surface: #FFFFFF;
+    --bg-surface-hover: #E8EAE6;
+    --border-hairline: #DDE1DE;
+    --text-primary: #1B1F23;
+    --text-secondary: #5B6470;
+    --accent: #3C5B6E;
+    --accent-hover: #2E4757;
+    --status-high: #5C7A5C;
+    --status-medium: #B08968;
+    --status-low: #9C5B4D;
+    --status-high-bg: #EAF0E9;
+    --status-medium-bg: #F5EDE6;
+    --status-low-bg: #F3E7E4;
+    --radius: 4px;
+  }
+
+  :root[data-theme="dark"] {
+    --bg-base: #14171A;
+    --bg-surface: #1B1F23;
+    --bg-surface-hover: #242830;
+    --border-hairline: #2C3138;
+    --text-primary: #EDEFEC;
+    --text-secondary: #8B93A0;
+    --accent: #6E93A8;
+    --accent-hover: #8AAABD;
+    --status-high: #7A9A7A;
+    --status-medium: #C9A17E;
+    --status-low: #BC7C6C;
+    --status-high-bg: #1E241D;
+    --status-medium-bg: #241F1B;
+    --status-low-bg: #241B19;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg-base: #14171A;
+      --bg-surface: #1B1F23;
+      --bg-surface-hover: #242830;
+      --border-hairline: #2C3138;
+      --text-primary: #EDEFEC;
+      --text-secondary: #8B93A0;
+      --accent: #6E93A8;
+      --accent-hover: #8AAABD;
+      --status-high: #7A9A7A;
+      --status-medium: #C9A17E;
+      --status-low: #BC7C6C;
+      --status-high-bg: #1E241D;
+      --status-medium-bg: #241F1B;
+      --status-low-bg: #241B19;
+    }
+  }
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+    font-weight: 600;
+  }
+
+  code, pre, kbd, samp {
+    font-family: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+  }
+}
