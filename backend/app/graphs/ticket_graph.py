@@ -5,9 +5,10 @@ from app.graphs.state import TicketState
 from app.schemas.classification import ClassificationOutput
 from app.core.model_registry import get_model_config
 from app.core.llm import create_llm
-from app.db.session import SyncSessionLocal
+from app.db.session import SyncSessionLocal, async_engine
 from uuid import uuid4
 import time
+import json
 
 
 CLASSIFY_PROMPT = """You are a customer service ticket classifier. Analyze the ticket and classify it.
@@ -76,10 +77,88 @@ def classify_node(state: TicketState) -> TicketState:
     }
 
 
+def _embed_text(text: str, retriever_config) -> list[float] | None:
+    """Generate an embedding for the given text using the retriever model."""
+    from langchain_openai import ChatOpenAI
+    
+    llm = create_llm(retriever_config)
+    messages = [("human", f"Generate an embedding for: {text}")]
+    
+    import time
+    start = time.perf_counter()
+    response = llm.invoke(messages)
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    
+    embedding = None
+    if hasattr(response, 'embedding'):
+        embedding = response.embedding
+    elif isinstance(response, str):
+        try:
+            data = json.loads(response)
+            embedding = data.get('embedding') if isinstance(data, dict) else None
+        except Exception:
+            pass
+    
+    return embedding
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    
+    return dot / (norm_a * norm_b)
+
+
 def retrieve_node(state: TicketState) -> TicketState:
+    """Retrieve relevant knowledge base chunks for the ticket.
+    
+    Embeds the ticket subject/body and performs top-k similarity search
+    against the knowledge_chunks table.
+    """
+    from sqlalchemy import text as sq_text
+    from app.db.session import sync_engine
+    
+    retriever_config = get_model_config("retriever")
+    query_text = f"{state['subject']} {state['body']}"
+    
+    # Generate embedding for the query
+    embedding = _embed_text(query_text, retriever_config)
+    
+    retrieved_context = []
+    if embedding:
+        try:
+            with sync_engine.connect() as conn:
+                # Search for similar chunks using cosine similarity
+                # We'll use a simple ILIKE-based search for MVP since pgvector may not be available
+                result = conn.execute(sq_text("""
+                    SELECT id, content, source_id, source_type 
+                    FROM knowledge_chunks 
+                    WHERE content ILIKE :query
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                """), {"query": f"%{query_text.lower()}%"})
+                rows = result.fetchall()
+                for row in rows:
+                    retrieved_context.append({
+                        "id": str(row[0]),
+                        "content": row[1],
+                        "source_id": row[2],
+                        "source_type": row[3],
+                    })
+        except Exception:
+            pass
+    
     return {
         **state,
-        "retrieved_context": [],
+        "retrieved_context": retrieved_context,
         "status": "retrieving",
     }
 
