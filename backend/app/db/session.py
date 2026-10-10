@@ -6,13 +6,21 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 from app.core.config import settings
 
 engine = create_async_engine(settings.DATABASE_URL, echo=True, future=True)
 
 AsyncSessionLocal = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
+)
+
+# Sync engine for sync operations
+sync_engine = create_engine(settings.DATABASE_URL.replace("+psycopg", ""), echo=True, future=True)
+
+SyncSessionLocal = sessionmaker(
+    sync_engine, expire_on_commit=False
 )
 
 Base = declarative_base()

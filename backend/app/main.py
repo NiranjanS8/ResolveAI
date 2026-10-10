@@ -1,7 +1,8 @@
 import sys
 import asyncio
 
-# On Windows, psycopg v3 async requires SelectorEventLoop
+# CRITICAL: Set event loop policy BEFORE any other imports
+# This must be at the very top to work with uvicorn subprocesses
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -12,17 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.health import router as health_router
 from app.api.tickets import router as tickets_router
 from app.core.config import settings
-from app.db.session import engine, Base
+from app.db.session import sync_engine, Base
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Startup - use sync engine to avoid psycopg v3 async issues on Windows
+    Base.metadata.create_all(bind=sync_engine)
     yield
-    # Shutdown
-    await engine.dispose()
 
 
 app = FastAPI(
