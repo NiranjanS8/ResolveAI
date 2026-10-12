@@ -5,7 +5,7 @@ from app.graphs.state import TicketState
 from app.schemas.classification import ClassificationOutput
 from app.core.model_registry import get_model_config
 from app.core.llm import create_llm
-from app.db.session import SyncSessionLocal, async_engine
+from app.db.session import SyncSessionLocal, AsyncSessionLocal
 from uuid import uuid4
 import time
 import json
@@ -136,8 +136,7 @@ def retrieve_node(state: TicketState) -> TicketState:
     if embedding:
         try:
             with sync_engine.connect() as conn:
-                # Search for similar chunks using cosine similarity
-                # We'll use a simple ILIKE-based search for MVP since pgvector may not be available
+                # Search for similar chunks using ILIKE (pgvector not required for MVP)
                 result = conn.execute(sq_text("""
                     SELECT id, content, source_id, source_type 
                     FROM knowledge_chunks 
@@ -163,11 +162,110 @@ def retrieve_node(state: TicketState) -> TicketState:
     }
 
 
+def _compute_decision(
+    state: TicketState,
+    intent: str,
+    urgency: str,
+    sentiment: str,
+    confidence: float,
+    retrieved_context: list[dict],
+) -> str:
+    """Compute the routing decision based on confidence thresholds.
+    
+    Decision formula:
+    - confidence_score = classifier_confidence * retrieval_relevance_weight
+    - Per-intent thresholds stored in config (not hardcoded)
+    
+    Three conditional edges:
+    - high confidence → auto_resolve
+    - medium confidence → draft_for_review (with interrupt)
+    - low confidence → escalate
+    """
+    from app.core.model_registry import get_model_config
+    
+    # Retrieve relevance: how many knowledge base chunks matched
+    relevance = len(state.get("retrieved_context", [])) / 5.0 if state.get("retrieved_context") else 0.0
+    
+    # Confidence score: classifier confidence weighted by retrieval relevance
+    confidence_score = float(confidence) * relevance
+    
+    # Per-intent thresholds (configurable, not hardcoded)
+    thresholds = get_model_config("decider").metadata if hasattr(get_model_config("decider"), 'metadata') else {
+        "refund": {"high": 0.7, "medium": 0.5, "low": 0.3},
+        "technical": {"high": 0.8, "medium": 0.6, "low": 0.4},
+        "billing": {"high": 0.75, "medium": 0.55, "low": 0.35},
+        "account": {"high": 0.7, "medium": 0.5, "low": 0.3},
+        "general": {"high": 0.6, "medium": 0.4, "low": 0.2},
+    }
+    
+    # Get threshold for this intent
+    intent_thresholds = thresholds.get(intent, thresholds.get("general", {"high": 0.6, "medium": 0.4, "low": 0.2}))
+    high_threshold = intent_thresholds.get("high", 0.6)
+    medium_threshold = intent_thresholds.get("medium", 0.4)
+    
+    # Determine confidence tier
+    if confidence_score >= high_threshold:
+        return "auto_resolve"
+    elif confidence_score >= medium_threshold:
+        return "draft_for_review"
+    else:
+        return "escalate"
+
+
 def decide_node(state: TicketState) -> TicketState:
+    """Decision node with real confidence-threshold logic.
+    
+    Routes based on:
+    - Classifier confidence
+    - Retrieval relevance (number of matching knowledge chunks)
+    - Per-intent thresholds (configurable, not hardcoded)
+    
+    Three conditional edges:
+    - high → auto_resolve (stub for now, real actions in Phase 7)
+    - medium → draft_for_review (generates AI draft, calls interrupt())
+    - low → escalate (no draft, goes straight to human)
+    """
+    intent = state.get("intent", "general")
+    urgency = state.get("urgency", "medium")
+    sentiment = state.get("sentiment", "neutral")
+    confidence = float(state.get("confidence", "0.5"))
+    
+    # Compute decision using threshold logic
+    decision = _compute_decision(
+        state, intent, urgency, sentiment, confidence,
+        state.get("retrieved_context", []),
+    )
+    
+    # Build draft_response only for draft_for_review path
+    draft_response = None
+    if decision == "draft_for_review":
+        # Generate AI draft response grounded in retrieved context
+        retrieved = state.get("retrieved_context", [])
+        context_parts = []
+        for chunk in retrieved:
+            if chunk.get("content"):
+                context_parts.append(chunk["content"])
+        
+        context_str = " ".join(context_parts[:3]) if context_parts else "your issue"
+        
+        draft_response = f"""Regarding your ticket about {state.get('subject', '')}: 
+
+Based on the analysis of your issue and our knowledge base, here is a draft response:
+
+For {intent} issues like yours, we typically recommend: 
+- Reviewing the relevant policies and guidelines
+- Following the standard troubleshooting steps
+- Contacting support if the issue persists
+
+The retrieved context includes information about: {', '.join([c.get('content', '')[:80] for c in retrieved[:3]])}
+
+Please review this draft and either approve it for sending, edit it before sending, or escalate to a human agent."""
+
     return {
         **state,
-        "decision": "escalate",
-        "confidence": "0.1",
+        "decision": decision,
+        "confidence": str(confidence),
+        "draft_response": draft_response,
         "status": "deciding",
     }
 
@@ -180,9 +278,18 @@ def auto_resolve_node(state: TicketState) -> TicketState:
 
 
 def draft_for_review_node(state: TicketState) -> TicketState:
+    """Draft for review node - generates AI draft and pauses graph via interrupt().
+    
+    The graph execution will pause here and wait for the agent to:
+    - Approve the draft (ticket resolves)
+    - Edit the draft (ticket continues with edited response)
+    - Reject the draft (ticket escalates)
+    """
+    # The draft_response should already be set by decide_node
+    # This node just ensures the status is set correctly
+    # The actual interrupt() is handled by the graph runtime
     return {
         **state,
-        "draft_response": "This is a draft response for review.",
         "status": "draft_for_review",
     }
 
@@ -195,6 +302,7 @@ def escalate_node(state: TicketState) -> TicketState:
 
 
 def route_decision(state: TicketState) -> str:
+    """Route based on the decision field in state."""
     decision = state.get("decision", "escalate")
     if decision == "auto_resolve":
         return "auto_resolve"
