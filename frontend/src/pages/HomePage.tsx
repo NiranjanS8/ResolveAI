@@ -5,6 +5,7 @@ import {
   type Channel,
   listTickets,
   createTicket,
+  getTicket,
   approveDraft,
   editDraft,
   rejectDraft,
@@ -43,6 +44,17 @@ export const HomePage: React.FC = () => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const loadTicketDetail = useCallback(async (ticket: Ticket) => {
+    try {
+      // The list endpoint omits messages/audit logs, so fetch the full record
+      // whenever we (re)select a ticket.
+      const detail = await getTicket(ticket.id);
+      setSelectedTicket(detail);
+    } catch {
+      setSelectedTicket(ticket);
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     try {
       const isOnline = await checkBackendHealth();
@@ -50,17 +62,17 @@ export const HomePage: React.FC = () => {
       const data = await listTickets();
       setTickets(data);
       if (data.length > 0 && !selectedTicket) {
-        setSelectedTicket(data[0]);
+        await loadTicketDetail(data[0]);
       } else if (selectedTicket) {
         const updated = data.find((t) => t.id === selectedTicket.id);
-        if (updated) setSelectedTicket(updated);
+        if (updated) await loadTicketDetail(updated);
       }
     } catch {
       setIsBackendConnected(false);
     } finally {
       setLoading(false);
     }
-  }, [selectedTicket]);
+  }, [selectedTicket, loadTicketDetail]);
 
   useEffect(() => {
     loadData();
@@ -73,7 +85,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await approveDraft(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       addToast('success', `Ticket #${ticket.id} approved. AI draft dispatched to customer.`);
     } catch {
       addToast('error', `Failed to approve ticket #${ticket.id}`);
@@ -85,7 +97,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await editDraft(ticket.id, editedDraft);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       addToast('success', `Edited response for #${ticket.id} sent successfully.`);
     } catch {
       addToast('error', `Failed to edit and send draft for #${ticket.id}`);
@@ -97,7 +109,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await rejectDraft(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       addToast('warning', `Ticket #${ticket.id} draft rejected — routed to human escalation.`);
     } catch {
       addToast('error', `Failed to reject ticket #${ticket.id}`);
@@ -109,7 +121,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await processRefundAction(ticket.id, amount);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       if (amount > 2000) {
         addToast('warning', `Refund of ₹${amount} exceeds ₹2,000 threshold. Supervisor approval required.`);
       } else {
@@ -125,7 +137,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await processOrderStatusAction(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       addToast('info', `Order status lookup executed for #${ticket.id}. Details added to conversation.`);
     } catch {
       addToast('error', `Order status lookup failed`);
@@ -137,7 +149,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await processPasswordResetAction(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       addToast('success', `Allow-listed action: Secure password reset link dispatched to ${ticket.customer_id}`);
     } catch {
       addToast('error', `Password reset failed`);
@@ -153,7 +165,7 @@ export const HomePage: React.FC = () => {
         messages: [...(ticket.messages || []), newMsg],
       };
       setTickets((prev) => prev.map((t) => (t.id === ticket.id ? updated : t)));
-      setSelectedTicket(updated);
+      await loadTicketDetail(updated);
       addToast('info', `Message posted to conversation.`);
     } catch {
       addToast('error', `Failed to send reply`);
@@ -165,7 +177,7 @@ export const HomePage: React.FC = () => {
     try {
       const created = await createTicket(formData);
       setTickets((prev) => [created, ...prev]);
-      setSelectedTicket(created);
+      await loadTicketDetail(created);
       setIsModalOpen(false);
       addToast('success', `Ticket #${created.id} ingested. LangGraph classified intent: "${created.intent}".`);
     } catch {
@@ -246,7 +258,7 @@ export const HomePage: React.FC = () => {
               <TicketList
                 tickets={tickets}
                 selectedTicketId={selectedTicket?.id}
-                onSelectTicket={setSelectedTicket}
+                onSelectTicket={loadTicketDetail}
                 filterChannel={filterChannel}
                 onFilterChannelChange={setFilterChannel}
               />

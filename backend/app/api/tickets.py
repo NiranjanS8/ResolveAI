@@ -268,7 +268,7 @@ async def get_ticket(
 ):
     result = await db.execute(
         select(Ticket)
-        .options(selectinload(Ticket.messages))
+        .options(selectinload(Ticket.messages), selectinload(Ticket.audit_logs))
         .where(Ticket.id == ticket_id)
     )
     ticket = result.scalar_one_or_none()
