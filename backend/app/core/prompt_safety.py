@@ -104,7 +104,19 @@ _BLOCK_TAGS = {
     "hr", "li", "ol", "p", "pre", "section", "table", "tr", "ul",
 }
 
-_SKIP_TAGS = {"head", "noscript", "script", "style", "template"}
+#: Elements whose text a reader is never shown. The value is the kind recorded as
+#: withheld, or ``None`` for plumbing that every HTML email has (a ``<head>``),
+#: where recording it would only add noise to the audit trail.
+_SUPPRESSED_TAGS: dict[str, str | None] = {
+    "head": None,
+    "noscript": None,
+    "script": "script",
+    "template": None,
+}
+
+# A stylesheet rule and a selector simple enough to match against one element.
+_CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
+_SIMPLE_SELECTOR = re.compile(r"[.#]?[A-Za-z][\w-]*\Z")
 
 
 @dataclass(frozen=True)
@@ -125,8 +137,9 @@ def _style_declarations(style: str) -> dict[str, str]:
     for part in style.split(";"):
         name, _, value = part.partition(":")
         name = name.strip().lower()
-        if name:
-            declarations[name] = value.strip().lower()
+        if not name:
+            continue
+        declarations[name] = value.strip().lower().removesuffix("!important").strip()
     return declarations
 
 
@@ -149,13 +162,34 @@ def _is_invisible_colour(value: str) -> bool:
     return value in _WHITE_VALUES or value in _TRANSPARENT_VALUES
 
 
-def _hides_text(style: str) -> bool:
-    """True when an inline style would keep an element's text out of a human's view.
+def _declares_dark_background(style: str) -> bool:
+    """True when a style paints a background white text would be legible on."""
+    declarations = _style_declarations(style)
+    background = (
+        declarations.get("background-color")
+        or declarations.get("background")
+        or declarations.get("background-image", "")
+    )
+    if not background or background == "none":
+        return False
+    return not _is_invisible_colour(background)
 
-    White text is treated as hidden even when no background is declared: the
-    white-on-white trick is the one this is written for, and the text is replaced
-    by a marker rather than dropped, so a message styled white-on-dark loses
-    nothing that the model cannot see was withheld.
+
+def _hides_text(
+    style: str, *, on_dark_background: bool = False, include_colour: bool = True
+) -> bool:
+    """True when a style would keep an element's text out of a human's view.
+
+    ``on_dark_background`` says whether anything in scope paints a non-white
+    background, in which case white text is legible and is kept. With no declared
+    background, white text is treated as hidden: that is the white-on-white trick
+    this exists for, and the text is replaced by a marker rather than dropped, so
+    a message styled white-on-dark loses nothing the model cannot see was
+    withheld.
+
+    ``include_colour`` is off for stylesheet rules. ``.header { color: #fff }`` is
+    ordinary in a dark-themed email and the background a rule sits on is not
+    visible from the rule, so only structural hiding is honoured there.
     """
     declarations = _style_declarations(style)
     if not declarations:
@@ -171,10 +205,11 @@ def _hides_text(style: str) -> bool:
         return True
 
     colour = declarations.get("color", "")
-    if colour in _TRANSPARENT_VALUES:
-        return True
-    if _is_invisible_colour(colour):
-        return True
+    if include_colour:
+        if colour in _TRANSPARENT_VALUES:
+            return True
+        if colour in _WHITE_VALUES and not on_dark_background:
+            return True
 
     # Text pushed out of its own box.
     for side in ("left", "top", "right", "bottom", "text-indent"):
@@ -191,6 +226,25 @@ def _hides_text(style: str) -> bool:
     return False
 
 
+def _hidden_selectors(css: str) -> set[str]:
+    """The simple selectors whose rule structurally hides an element's text.
+
+    Descendant combinators and compound selectors are skipped rather than guessed
+    at, because a wrong guess hides text a person could see. Rules inside a
+    conditional at-rule are honoured unconditionally: the condition cannot be
+    evaluated here, and withholding visible text is the cheaper mistake.
+    """
+    hidden: set[str] = set()
+    for raw_selectors, declarations in _CSS_RULE.findall(css):
+        if not _hides_text(declarations, include_colour=False):
+            continue
+        for selector in raw_selectors.split(","):
+            selector = selector.strip().lower()
+            if _SIMPLE_SELECTOR.match(selector):
+                hidden.add(selector)
+    return hidden
+
+
 # ---------------------------------------------------------------------------
 # HTML bodies
 # ---------------------------------------------------------------------------
@@ -199,56 +253,107 @@ def _hides_text(style: str) -> bool:
 class _VisibleTextExtractor(HTMLParser):
     """Reduce an HTML body to the text a human would actually be shown.
 
-    Comments, ``script``/``style`` bodies, and elements hidden by their inline
-    style are replaced by :data:`HIDDEN_MARKER`, so the model can tell that
-    something was there without ever reading it.
+    Comments, ``script`` bodies, and elements hidden by an inline style or by a
+    stylesheet rule are removed. Withheld content is marked with
+    :data:`HIDDEN_MARKER`, so the model can tell something was there instead of
+    silently missing part of the message; plumbing such as ``<head>`` is dropped
+    without a mark, because it is not content anyone withheld.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
-        self._hidden_depth = 0
+        self._suppress_depth = 0
+        self._style_depth = 0
+        self._style_buffer: list[str] = []
+        self._hidden_selectors: set[str] = set()
+        # Whether each open element paints a non-white background, so white text
+        # inside a dark header is kept.
+        self._background_stack: list[bool] = []
         self.removed: list[str] = []
 
-    def _is_hidden(self, tag: str, attrs: list[tuple[str, str | None]]) -> bool:
-        if tag in _SKIP_TAGS:
-            return True
-        attributes = {name.lower(): (value or "") for name, value in attrs}
+    def _attributes(self, attrs: list[tuple[str, str | None]]) -> dict[str, str]:
+        return {name.lower(): (value or "") for name, value in attrs}
+
+    def _is_hidden(self, tag: str, attributes: dict[str, str]) -> bool:
         if "hidden" in attributes:
             return True
-        return _hides_text(attributes.get("style", ""))
+        if self._matches_hidden_selector(tag, attributes):
+            return True
+        style = attributes.get("style", "")
+        return _hides_text(
+            style,
+            on_dark_background=any(self._background_stack)
+            or _declares_dark_background(style),
+        )
+
+    def _matches_hidden_selector(self, tag: str, attributes: dict[str, str]) -> bool:
+        if not self._hidden_selectors:
+            return False
+        if tag in self._hidden_selectors:
+            return True
+        for class_name in attributes.get("class", "").split():
+            if f".{class_name.lower()}" in self._hidden_selectors:
+                return True
+        identifier = attributes.get("id", "").strip().lower()
+        return bool(identifier) and f"#{identifier}" in self._hidden_selectors
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "style":
+            self._style_depth += 1
+            return
         if tag in _VOID_TAGS:
             if tag in _BLOCK_TAGS:
                 self._parts.append("\n")
             return
 
-        hidden = self._is_hidden(tag, attrs)
-        if hidden and self._hidden_depth == 0:
-            # Only the outermost hidden element is reported, so nested styling
-            # does not inflate the count.
-            self.removed.append(tag)
-            self._parts.append(HIDDEN_MARKER)
+        attributes = self._attributes(attrs)
+        suppressed = tag in _SUPPRESSED_TAGS
+        hidden = not suppressed and self._is_hidden(tag, attributes)
+        self._background_stack.append(
+            _declares_dark_background(attributes.get("style", ""))
+        )
 
-        if hidden or self._hidden_depth:
-            self._hidden_depth += 1
+        if self._suppress_depth == 0:
+            if hidden:
+                # Only the outermost hidden element is reported, so nested
+                # styling does not inflate the count.
+                self.removed.append(tag)
+                self._parts.append(HIDDEN_MARKER)
+            elif suppressed:
+                kind = _SUPPRESSED_TAGS[tag]
+                if kind is not None:
+                    self.removed.append(kind)
+
+        if suppressed or hidden or self._suppress_depth:
+            self._suppress_depth += 1
             return
 
         if tag in _BLOCK_TAGS:
             self._parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "style":
+            self._style_depth = max(0, self._style_depth - 1)
+            if self._style_depth == 0:
+                self._hidden_selectors |= _hidden_selectors("".join(self._style_buffer))
+                self._style_buffer.clear()
+            return
         if tag in _VOID_TAGS:
             return
-        if self._hidden_depth:
-            self._hidden_depth -= 1
+        if self._background_stack:
+            self._background_stack.pop()
+        if self._suppress_depth:
+            self._suppress_depth -= 1
             return
         if tag in _BLOCK_TAGS:
             self._parts.append("\n")
 
     def handle_data(self, data: str) -> None:
-        if self._hidden_depth:
+        if self._style_depth:
+            self._style_buffer.append(data)
+            return
+        if self._suppress_depth:
             return
         self._parts.append(data)
 
