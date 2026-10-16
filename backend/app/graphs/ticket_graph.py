@@ -147,8 +147,8 @@ def _compute_decision(
     - medium confidence → draft_for_review (with interrupt)
     - low confidence → escalate
     """
-    from app.core.model_registry import get_model_config
-    
+    from app.core.thresholds import thresholds_for
+
     # Retrieve relevance: how many knowledge base chunks matched
     relevance = len(state.get("retrieved_context", [])) / 5.0 if state.get("retrieved_context") else 0.0
     
@@ -156,18 +156,9 @@ def _compute_decision(
     confidence_score = float(confidence) * relevance
     
     # Per-intent thresholds (configurable, not hardcoded)
-    thresholds = get_model_config("decider").metadata if hasattr(get_model_config("decider"), 'metadata') else {
-        "refund": {"high": 0.7, "medium": 0.5, "low": 0.3},
-        "technical": {"high": 0.8, "medium": 0.6, "low": 0.4},
-        "billing": {"high": 0.75, "medium": 0.55, "low": 0.35},
-        "account": {"high": 0.7, "medium": 0.5, "low": 0.3},
-        "general": {"high": 0.6, "medium": 0.4, "low": 0.2},
-    }
-    
-    # Get threshold for this intent
-    intent_thresholds = thresholds.get(intent, thresholds.get("general", {"high": 0.6, "medium": 0.4, "low": 0.2}))
-    high_threshold = intent_thresholds.get("high", 0.6)
-    medium_threshold = intent_thresholds.get("medium", 0.4)
+    intent_thresholds = thresholds_for(intent)
+    high_threshold = intent_thresholds["high"]
+    medium_threshold = intent_thresholds["medium"]
     
     # Determine confidence tier
     if confidence_score >= high_threshold:
