@@ -1,5 +1,7 @@
 from uuid import uuid4
 import asyncio
+from collections import defaultdict, deque
+from time import monotonic
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +40,27 @@ EMAIL_REQUIRED_FIELDS = {"subject", "body", "from_address"}
 
 # Phase 10: Security constants
 RATE_LIMIT_PER_MINUTE = 60  # Max tickets per minute per customer
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+_recent_submissions: dict[str, deque] = defaultdict(deque)
+
+
+def enforce_rate_limit(customer_id: str) -> None:
+    """Sliding-window rate limit on ticket creation, keyed by customer.
+
+    In-process only (fine for the single-instance MVP); a multi-instance
+    deployment would move this counter into Redis.
+    """
+    now = monotonic()
+    window = _recent_submissions[customer_id]
+    while window and now - window[0] > RATE_LIMIT_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= RATE_LIMIT_PER_MINUTE:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please try again in a minute.",
+        )
+    window.append(now)
 
 
 def apply_graph_result(ticket: Ticket, result: dict) -> None:
@@ -202,6 +225,8 @@ async def create_ticket(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid channel. Allowed channels: {', '.join(ALLOWED_CHANNELS)}",
         )
+
+    enforce_rate_limit(ticket_in.customer_id)
     
     ticket = Ticket(
         id=uuid4(),
