@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+
+    # SQL statement logging (very noisy; enable only when debugging)
+    SQL_ECHO: bool = False
     
     # LLM API Keys
     ANTHROPIC_API_KEY: Optional[str] = None

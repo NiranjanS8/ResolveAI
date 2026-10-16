@@ -10,14 +10,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.core.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=True, future=True)
+engine = create_async_engine(settings.DATABASE_URL, echo=settings.SQL_ECHO, future=True)
 
 AsyncSessionLocal = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
 
 # Sync engine for sync operations
-sync_engine = create_engine(settings.DATABASE_URL.replace("+psycopg", ""), echo=True, future=True)
+sync_engine = create_engine(settings.DATABASE_URL.replace("+psycopg", ""), echo=settings.SQL_ECHO, future=True)
 
 SyncSessionLocal = sessionmaker(
     sync_engine, expire_on_commit=False
