@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { getAnalytics, type AnalyticsData } from '../api/tickets';
+import {
+  getAnalytics,
+  errorMessage,
+  type AnalyticsData,
+  type AnalyticsRange,
+} from '../api/tickets';
 import { AnalyticsChart } from './AnalyticsChart';
 
-const RANGES: Array<{ id: '24h' | '7d' | '30d'; label: string }> = [
+const RANGES: Array<{ id: AnalyticsRange; label: string }> = [
   { id: '24h', label: 'Last 24 hours' },
   { id: '7d', label: 'Last 7 days' },
   { id: '30d', label: 'Last 30 days' },
@@ -36,20 +41,32 @@ const GuardrailRow: React.FC<{ label: string; value: string }> = ({ label, value
   </div>
 );
 
-export const AnalyticsDashboardView: React.FC = () => {
-  const [range, setRange] = useState<'24h' | '7d' | '30d'>('30d');
-  const [snapshot, setSnapshot] = useState<{ range: '24h' | '7d' | '30d'; data: AnalyticsData } | null>(null);
+type Snapshot = { range: AnalyticsRange; data: AnalyticsData | null; error: string | null };
 
-  // Loading is derived from whether the fetched snapshot matches the selected
-  // range, so the effect never needs to set state synchronously.
-  const loading = snapshot?.range !== range;
-  const data = snapshot?.range === range ? snapshot.data : null;
+const percent = (value: number | null) => (value === null ? '—' : `${value.toFixed(1)}%`);
+const usd = (value: number | null) => (value === null ? '—' : value < 0.01 ? `$${value.toFixed(6)}` : `$${value.toFixed(4)}`);
+const seconds = (value: number | null) => (value === null ? '—' : `${value.toFixed(1)}s`);
+
+export const AnalyticsDashboardView: React.FC = () => {
+  const [range, setRange] = useState<AnalyticsRange>('30d');
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+
+  // The snapshot is keyed by range, so loading, data and error are all derived
+  // from whether the current range has been fetched — no synchronously-set state.
+  const current = snapshot?.range === range ? snapshot : null;
+  const loading = current === null;
+  const data = current?.data ?? null;
+  const error = current?.error ?? null;
 
   useEffect(() => {
     let mounted = true;
-    getAnalytics(range).then((result) => {
-      if (mounted) setSnapshot({ range, data: result });
-    });
+    getAnalytics(range)
+      .then((result) => {
+        if (mounted) setSnapshot({ range, data: result, error: null });
+      })
+      .catch((err: unknown) => {
+        if (mounted) setSnapshot({ range, data: null, error: errorMessage(err) });
+      });
     return () => {
       mounted = false;
     };
@@ -63,7 +80,7 @@ export const AnalyticsDashboardView: React.FC = () => {
             Operations and ROI
           </h2>
           <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            Autonomous deflection, handle time, and cost per ticket.
+            Measured from stored tickets, messages, provider calls and audit entries.
           </p>
         </div>
 
@@ -96,7 +113,9 @@ export const AnalyticsDashboardView: React.FC = () => {
         <p className="text-[13px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           {loading
             ? 'Recalculating metrics.'
-            : data?.executive_summary || 'No summary available for this window yet.'}
+            : error
+              ? `Could not load analytics: ${error}`
+              : data?.summary || 'No data for this window.'}
         </p>
       </section>
 
@@ -106,35 +125,46 @@ export const AnalyticsDashboardView: React.FC = () => {
       >
         <Kpi
           label="Autonomous deflection"
-          value={data ? `${data.deflection_rate.deflection_rate}%` : '—'}
-          note={`${data?.deflection_rate.auto_resolved ?? 0} tickets resolved without an agent`}
+          value={data ? percent(data.volume.deflection_rate) : '—'}
+          note={
+            data
+              ? `${data.volume.deflected} of ${data.volume.total} tickets resolved without an agent`
+              : 'No tickets in this window'
+          }
         />
         <Kpi
-          label="Average handle time"
-          value={data ? `${data.average_handle_time.average_handle_time_seconds}s` : '—'}
-          note="Human baseline: 14.5 minutes"
+          label="Time to first reply"
+          value={data ? seconds(data.time_to_reply.median_seconds) : '—'}
+          note={
+            data && data.time_to_reply.sample_size > 0
+              ? `Median across ${data.time_to_reply.sample_size} replies`
+              : 'No replies recorded yet'
+          }
         />
         <Kpi
           label="Cost per ticket"
-          value={data ? `₹${data.cost_per_ticket.cost_per_ticket.toFixed(2)}` : '—'}
-          note="Token inference plus embedding compute"
+          value={data ? usd(data.cost.cost_per_ticket) : '—'}
+          note={
+            data && data.cost.unpriced_calls > 0
+              ? `USD · ${data.cost.unpriced_calls} calls unpriced`
+              : 'USD, from real token usage'
+          }
         />
         <Kpi
-          label="CSAT proxy"
-          value={data ? `${data.csat_proxy.csat_score.toFixed(1)}%` : '—'}
-          note="From customer resolution ratings"
+          label="Draft acceptance"
+          value={data ? percent(data.draft_review.acceptance_rate) : '—'}
+          note={
+            data && data.draft_review.total_reviewed > 0
+              ? `${data.draft_review.approved_unchanged} of ${data.draft_review.total_reviewed} approved unchanged`
+              : 'No drafts reviewed yet'
+          }
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <AnalyticsChart title="Deflection rate" metric="deflection_rate" range={range} />
-        <AnalyticsChart
-          title="Escalation reasons"
-          metric="escalation_breakdown"
-          range={range}
-          data={data?.escalation_breakdown}
-        />
-        <AnalyticsChart title="Unit economics" metric="cost_per_ticket" range={range} />
+        <AnalyticsChart title="Tickets and deflection over time" metric="deflection_trend" range={range} data={data} />
+        <AnalyticsChart title="Escalation reasons" metric="escalation_breakdown" range={range} data={data} />
+        <AnalyticsChart title="Unit economics and provider health" metric="unit_economics" range={range} data={data} />
 
         <section
           className="p-4"
@@ -143,9 +173,22 @@ export const AnalyticsDashboardView: React.FC = () => {
           <h3 className="text-[13px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
             Policy and guardrail enforcement
           </h3>
-          <GuardrailRow label="Refund cap interceptions" value="14" />
-          <GuardrailRow label="Allow-listed tool dispatches" value="100%" />
-          <GuardrailRow label="Intent classification accuracy" value="96.8%" />
+          <GuardrailRow
+            label="Refund cap interceptions"
+            value={data ? String(data.guardrails.refund_cap_interceptions) : '—'}
+          />
+          <GuardrailRow
+            label="Allow-listed tool dispatches"
+            value={data ? String(data.guardrails.allow_listed_dispatches) : '—'}
+          />
+          <GuardrailRow
+            label="Format deviations corrected"
+            value={data ? String(data.guardrails.format_deviations) : '—'}
+          />
+          <GuardrailRow
+            label="Provider errors"
+            value={data ? `${data.provider_health.failures}` : '—'}
+          />
         </section>
       </div>
     </div>

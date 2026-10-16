@@ -13,7 +13,7 @@ import {
   processOrderStatusAction,
   processPasswordResetAction,
   addMessage,
-  checkBackendHealth,
+  errorMessage,
 } from '../api/tickets';
 import { Navbar } from '../components/Navbar';
 import { TicketList } from '../components/TicketList';
@@ -45,6 +45,7 @@ export const HomePage: React.FC = () => {
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = (type: ToastMessage['type'], message: string) => {
@@ -66,23 +67,28 @@ export const HomePage: React.FC = () => {
       const detail = await getTicket(ticket.id);
       setSelectedTicket(detail);
     } catch {
+      // Fall back to the list record: it is real, just without the detail
+      // payload, so the pane stays useful while the fetch is retried.
       setSelectedTicket(ticket);
     }
   }, []);
 
   const loadData = useCallback(async () => {
     try {
-      const isOnline = await checkBackendHealth();
-      setIsBackendConnected(isOnline);
       const data = await listTickets();
       setTickets(data);
+      // Connectivity reflects the call that supplies the data, not a separate
+      // probe, so the indicator can never read "Live" over a stale or failed list.
+      setIsBackendConnected(true);
+      setLoadError(null);
       // Fall back to the newest ticket when the selected one is gone (deleted, or
       // filtered out between polls) so the detail pane never strands a stale id.
       const target = data.find((t) => t.id === selectedTicket?.id) ?? data[0];
       if (target) await loadTicketDetail(target);
       else setSelectedTicket(null);
-    } catch {
+    } catch (error) {
       setIsBackendConnected(false);
+      setLoadError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -100,8 +106,8 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
       addToast('success', `Ticket #${ticket.id.slice(0, 8)} approved. AI draft dispatched to customer.`);
-    } catch {
-      addToast('error', `Failed to approve ticket #${ticket.id.slice(0, 8)}`);
+    } catch (error) {
+      addToast('error', `Failed to approve #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
     }
   };
 
@@ -111,8 +117,8 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
       addToast('success', `Edited response for #${ticket.id.slice(0, 8)} sent successfully.`);
-    } catch {
-      addToast('error', `Failed to edit and send draft for #${ticket.id.slice(0, 8)}`);
+    } catch (error) {
+      addToast('error', `Failed to send edited draft for #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
     }
   };
 
@@ -122,8 +128,8 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
       addToast('warning', `Ticket #${ticket.id.slice(0, 8)} draft rejected. Routed to a human.`);
-    } catch {
-      addToast('error', `Failed to reject ticket #${ticket.id.slice(0, 8)}`);
+    } catch (error) {
+      addToast('error', `Failed to reject #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
     }
   };
 
@@ -137,8 +143,8 @@ export const HomePage: React.FC = () => {
       } else {
         addToast('success', `Refund of ₹${amount} processed under the ₹2,000 auto-cap.`);
       }
-    } catch {
-      addToast('error', `Refund execution failed for #${ticket.id.slice(0, 8)}`);
+    } catch (error) {
+      addToast('error', `Refund execution failed for #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
     }
   };
 
@@ -148,8 +154,8 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
       addToast('info', `Order status lookup executed for #${ticket.id.slice(0, 8)}.`);
-    } catch {
-      addToast('error', 'Order status lookup failed');
+    } catch (error) {
+      addToast('error', `Order status lookup failed: ${errorMessage(error)}`);
     }
   };
 
@@ -159,8 +165,8 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
       addToast('success', `Secure password reset link dispatched to ${ticket.customer_id}`);
-    } catch {
-      addToast('error', 'Password reset failed');
+    } catch (error) {
+      addToast('error', `Password reset failed: ${errorMessage(error)}`);
     }
   };
 
@@ -171,8 +177,8 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => prev.map((t) => (t.id === ticket.id ? updated : t)));
       await loadTicketDetail(updated);
       addToast('info', 'Message posted to the conversation.');
-    } catch {
-      addToast('error', 'Failed to send reply');
+    } catch (error) {
+      addToast('error', `Failed to send reply: ${errorMessage(error)}`);
     }
   };
 
@@ -183,8 +189,8 @@ export const HomePage: React.FC = () => {
       await loadTicketDetail(created);
       setIsModalOpen(false);
       addToast('success', `Ticket #${created.id.slice(0, 8)} ingested. Classified as "${created.intent}".`);
-    } catch {
-      addToast('error', 'Failed to ingest ticket');
+    } catch (error) {
+      addToast('error', `Failed to ingest ticket: ${errorMessage(error)}`);
     }
   };
 
@@ -218,6 +224,33 @@ export const HomePage: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {loadError && (
+        <div
+          className="app-gutter flex flex-wrap items-center gap-x-4 gap-y-1 py-2 text-[12px]"
+          style={{
+            backgroundColor: 'var(--bg-surface)',
+            borderBottom: '1px solid var(--border-hairline)',
+            borderLeft: '3px solid var(--status-low)',
+          }}
+        >
+          <span style={{ color: 'var(--text-primary)' }}>Backend unavailable</span>
+          <span className="font-mono" style={{ color: 'var(--text-secondary)' }}>
+            {loadError}
+          </span>
+          <button
+            onClick={loadData}
+            className="ml-auto px-3 h-6 text-[12px] font-medium"
+            style={{
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-hairline)',
+              borderRadius: 'var(--radius)',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <main className="app-gutter flex-1 min-h-0 py-4">
         {loading && tickets.length === 0 ? (
