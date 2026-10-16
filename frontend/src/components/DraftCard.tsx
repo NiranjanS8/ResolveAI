@@ -51,7 +51,6 @@ export const DraftCard: React.FC<DraftCardProps> = ({
       style={{
         backgroundColor: 'var(--bg-base)',
         borderLeft: '3px solid var(--accent)',
-        borderRadius: 'var(--radius)',
       }}
     >
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">

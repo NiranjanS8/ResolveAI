@@ -100,7 +100,7 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
         <form
           onSubmit={handleRefundSubmit}
           className="p-3.5 space-y-2.5 animate-slide-in"
-          style={{ border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius)' }}
+          style={{ border: '1px solid var(--border-hairline)' }}
         >
           <div className="flex items-center justify-between gap-2 text-[12px]">
             <span className="font-medium" style={{ color: 'var(--text-primary)' }}>

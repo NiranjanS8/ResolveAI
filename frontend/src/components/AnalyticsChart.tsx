@@ -14,7 +14,7 @@ const BAR_FILL = 'var(--text-secondary)';
 const Panel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div
     className="p-4 space-y-3"
-    style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius)' }}
+    style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-hairline)' }}
   >
     {children}
   </div>

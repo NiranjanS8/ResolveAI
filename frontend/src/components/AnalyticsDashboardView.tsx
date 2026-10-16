@@ -138,7 +138,7 @@ export const AnalyticsDashboardView: React.FC = () => {
 
         <section
           className="p-4"
-          style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius)' }}
+          style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-hairline)' }}
         >
           <h3 className="text-[13px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
             Policy and guardrail enforcement

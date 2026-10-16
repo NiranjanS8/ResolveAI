@@ -384,7 +384,6 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
                       style={{
                         backgroundColor: 'var(--bg-base)',
                         color: 'var(--text-secondary)',
-                        borderRadius: 'var(--radius)',
                       }}
                     >
                       {JSON.stringify(log.payload, null, 2)}
