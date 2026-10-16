@@ -21,9 +21,11 @@ PROVIDER_MODELS: Dict[str, Dict[str, tuple[str, float, int]]] = {
         "drafter": ("gemini-2.5-pro", 0.3, 1000),
     },
     "mistral": {
-        "classifier": ("mistral-small-latest", 0.0, 500),
-        "decider": ("mistral-small-latest", 0.0, 500),
-        "drafter": ("mistral-large-latest", 0.3, 1000),
+        # Free-tier Mistral accounts have zero quota for the commercial
+        # "mistral-*-latest" models, so these are the openly available ones.
+        "classifier": ("open-mistral-nemo", 0.0, 500),
+        "decider": ("open-mistral-nemo", 0.0, 500),
+        "drafter": ("open-mistral-nemo", 0.3, 1000),
     },
     "anthropic": {
         "classifier": ("claude-3-haiku-20240307", 0.0, 500),
