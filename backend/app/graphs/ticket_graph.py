@@ -10,7 +10,6 @@ from app.db.session import SyncSessionLocal, AsyncSessionLocal
 from app.models.base import ProviderCall
 from uuid import uuid4
 import time
-import json
 
 
 CLASSIFY_PROMPT = """You are a customer service ticket classifier. Analyze the ticket and classify it.
@@ -79,87 +78,48 @@ def classify_node(state: TicketState) -> TicketState:
     }
 
 
-def _embed_text(text: str, retriever_config) -> list[float] | None:
-    """Generate an embedding vector using the OpenAI embeddings API.
-    
-    Uses OpenAIEmbeddings (not ChatOpenAI) — embedding models do not accept
-    chat-style messages and require the dedicated embeddings endpoint.
-    """
-    try:
-        from langchain_openai import OpenAIEmbeddings
-        embeddings = OpenAIEmbeddings(
-            model=retriever_config.model,  # e.g. text-embedding-3-small
-        )
-        return embeddings.embed_query(text)
-    except Exception:
-        return None
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = sum(x * x for x in a) ** 0.5
-    norm_b = sum(x * x for x in b) ** 0.5
-    
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    
-    return dot / (norm_a * norm_b)
-
-
 def retrieve_node(state: TicketState) -> TicketState:
-    """Retrieve relevant knowledge base chunks for the ticket.
-    
-    Embeds the ticket subject+body and performs top-k cosine similarity search
-    against the knowledge_chunks table using the pgvector <=> operator.
-    
-    Falls back gracefully if pgvector is unavailable or the table is empty.
+    """Retrieve the most relevant knowledge-base chunks for the ticket.
+
+    Embeds the ticket subject+body with the shared embedding function and ranks
+    stored chunks by cosine similarity. Embeddings are stored as a plain
+    ``FLOAT[]`` column, so similarity is computed in Python (fine at MVP scale).
     """
     from sqlalchemy import text as sq_text
     from app.db.session import sync_engine
+    from app.core.embeddings import embed_text, cosine_similarity
 
-    retriever_config = get_model_config("retriever")
     query_text = f"{state['subject']} {state['body']}"
-
-    embedding = _embed_text(query_text, retriever_config)
+    embedding = embed_text(query_text)
 
     retrieved_context = []
-    if embedding:
-        try:
-            with sync_engine.connect() as conn:
-                # Prefer pgvector cosine similarity; fall back to ILIKE if the
-                # embedding column or extension is not yet configured.
-                try:
-                    embedding_literal = json.dumps(embedding)
-                    result = conn.execute(sq_text("""
-                        SELECT id, content, source_id, source_type
-                        FROM knowledge_chunks
-                        ORDER BY embedding <=> CAST(:emb AS vector)
-                        LIMIT 5
-                    """), {"emb": embedding_literal})
-                except Exception:
-                    # TODO: enable pgvector extension and add embedding column to
-                    # knowledge_chunks to use real cosine similarity (Phase 4).
-                    result = conn.execute(sq_text("""
-                        SELECT id, content, source_id, source_type
-                        FROM knowledge_chunks
-                        WHERE content ILIKE :query
-                        ORDER BY created_at DESC
-                        LIMIT 5
-                    """), {"query": f"%{query_text[:80].lower()}%"})
+    try:
+        with sync_engine.connect() as conn:
+            rows = conn.execute(sq_text("""
+                SELECT id, content, source_id, source_type, embedding
+                FROM knowledge_chunks
+            """)).fetchall()
 
-                for row in result.fetchall():
-                    retrieved_context.append({
-                        "id": str(row[0]),
-                        "content": row[1],
-                        "source_id": row[2],
-                        "source_type": row[3],
-                    })
-        except Exception:
-            pass
+        scored = []
+        for row in rows:
+            chunk_embedding = list(row[4]) if row[4] else []
+            score = cosine_similarity(embedding, chunk_embedding)
+            scored.append((score, row))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        for score, row in scored[:5]:
+            if score <= 0:
+                continue
+            retrieved_context.append({
+                "id": str(row[0]),
+                "content": row[1],
+                "source_id": row[2],
+                "source_type": row[3],
+                "score": round(score, 4),
+            })
+    except Exception:
+        pass
 
     return {
         **state,

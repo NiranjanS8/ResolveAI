@@ -5,7 +5,8 @@ Usage:
 
 This script:
 - Chunks provided FAQ docs into segments
-- Generates mock embeddings (deterministic based on content)
+- Generates embeddings via the shared embedding function (OpenAI when a key
+  is configured, deterministic local vectors otherwise)
 - Stores embeddings in the knowledge_chunks table
 - Is idempotent: skips chunks that already exist (based on content hash)
 """
@@ -17,6 +18,7 @@ import psycopg2
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.embeddings import embed_text
 
 
 # Simple FAQ knowledge base for MVP (5 docs)
@@ -59,20 +61,6 @@ def compute_content_hash(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
 
 
-def generate_mock_embedding(text: str, dimension: int = 1536) -> list[float]:
-    """Generate a mock embedding vector for the given text.
-
-    In production, this would use the retriever model (OpenAI text-embedding-3-small).
-    For MVP, we create a deterministic vector based on the text hash.
-    """
-    hash_val = int(hashlib.sha256(text.encode('utf-8')).hexdigest(), 16)
-    embedding = []
-    for i in range(dimension):
-        val = ((hash_val >> (i * 8)) & 0xFF) / 255.0
-        embedding.append(val - 0.5)  # Center around 0
-    return embedding
-
-
 def format_pg_array(floats: list[float]) -> str:
     """Format a list of floats as a PostgreSQL FLOAT[] array string."""
     return "{" + ",".join(f"{v:.6f}" for v in floats) + "}"
@@ -104,8 +92,9 @@ def ingest_knowledge_base():
             print(f"Skipping existing chunk (id={doc['id']})")
             continue
         
-        # Generate mock embedding
-        embedding = generate_mock_embedding(content, dimension=1536)
+        # Generate embedding using the shared embedding function so that
+        # indexed vectors match query vectors at retrieval time.
+        embedding = embed_text(content)
         # Format as PostgreSQL FLOAT[] array string
         embedding_str = format_pg_array(embedding)
         

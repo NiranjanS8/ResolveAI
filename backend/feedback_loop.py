@@ -24,6 +24,7 @@ import psycopg2
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.embeddings import embed_text
 
 
 # Similarity cosine between two embedding strings (FLOAT[] arrays)
@@ -50,16 +51,6 @@ def _cosine_similarity_embedding(emb_a: str, emb_b: str) -> float:
 def compute_content_hash(content: str) -> str:
     """Compute a hash for content to check idempotency."""
     return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
-
-
-def generate_mock_embedding(text: str, dimension: int = 1536) -> list[float]:
-    """Generate a deterministic mock embedding for the given text."""
-    hash_val = int(hashlib.sha256(text.encode('utf-8')).hexdigest(), 16)
-    embedding = []
-    for i in range(dimension):
-        val = ((hash_val >> (i * 8)) & 0xFF) / 255.0
-        embedding.append(val - 0.5)
-    return embedding
 
 
 def format_pg_array(floats: list[float]) -> str:
@@ -115,8 +106,8 @@ def feedback_loop():
             continue
         
         # Generate embeddings for the original and edited drafts
-        orig_embedding = generate_mock_embedding(original_draft, dimension=1536)
-        edit_embedding = generate_mock_embedding(edited_response, dimension=1536)
+        orig_embedding = embed_text(original_draft)
+        edit_embedding = embed_text(edited_response)
         orig_emb_str = format_pg_array(orig_embedding)
         edit_emb_str = format_pg_array(edit_embedding)
         
