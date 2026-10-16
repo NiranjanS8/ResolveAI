@@ -1,4 +1,5 @@
 from uuid import uuid4
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,107 +81,114 @@ def log_audit_action(
         audit_db.commit()
 
 
-def run_ticket_graph(ticket: Ticket, agent_decision: str = None, edited_draft: str = None, action: str = None, action_amount: float = None) -> dict:
-    import logging
-    logger = logging.getLogger(__name__)
-    try:
-        graph = get_compiled_graph()
-        initial_state: TicketState = {
-            "ticket_id": str(ticket.id),
-            "customer_id": ticket.customer_id,
-            "subject": ticket.subject,
-            "body": ticket.body,
-            "status": ticket.status.value if hasattr(ticket.status, 'value') else str(ticket.status),
-            "intent": ticket.intent,
-            "urgency": ticket.urgency,
-            "sentiment": ticket.sentiment,
-            "confidence": ticket.confidence,
-            "retrieved_context": ticket.retrieved_context if hasattr(ticket, 'retrieved_context') else None,
-            "decision": None,
-            "draft_response": None,
-            "error": None,
-            "created_at": ticket.created_at.isoformat() if ticket.created_at else "",
-            "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else "",
+def _initial_state(ticket: Ticket) -> TicketState:
+    return {
+        "ticket_id": str(ticket.id),
+        "customer_id": ticket.customer_id,
+        "subject": ticket.subject,
+        "body": ticket.body,
+        "status": ticket.status.value if hasattr(ticket.status, "value") else str(ticket.status),
+        "intent": ticket.intent,
+        "urgency": ticket.urgency,
+        "sentiment": ticket.sentiment,
+        "confidence": ticket.confidence,
+        "retrieved_context": ticket.retrieved_context,
+        "decision": None,
+        "draft_response": None,
+        "error": None,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else "",
+        "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else "",
+    }
+
+
+def _graph_config(ticket: Ticket) -> dict:
+    return {"configurable": {"thread_id": str(ticket.id)}}
+
+
+def _state_after_run(graph, config: dict, fallback: dict) -> dict:
+    """Return the persisted graph state, falling back to the invoke result."""
+    snapshot = graph.get_state(config)
+    if snapshot is not None and snapshot.values:
+        return dict(snapshot.values)
+    return dict(fallback)
+
+
+def run_ticket_graph(ticket: Ticket) -> dict:
+    """Run the graph for a new ticket.
+
+    Returns the state at completion, or at the human-in-the-loop interrupt when
+    the ticket is routed to draft_for_review (where the run stays paused until
+    resumed via resume_ticket_graph).
+    """
+    graph = get_compiled_graph()
+    config = _graph_config(ticket)
+    result = graph.invoke(_initial_state(ticket), config=config)
+    return _state_after_run(graph, config, result)
+
+
+def resume_ticket_graph(ticket: Ticket, action: str, edited_draft: str | None = None) -> dict:
+    """Resume a paused draft_for_review run with the agent's decision."""
+    graph = get_compiled_graph()
+    config = _graph_config(ticket)
+    review: dict = {"action": action}
+    if edited_draft is not None:
+        review["edited_response"] = edited_draft
+    result = graph.invoke(Command(resume=review), config=config)
+    return _state_after_run(graph, config, result)
+
+
+def execute_action(ticket: Ticket, action: str, amount: float | None = None) -> dict:
+    """Run an allow-listed action with code-enforced guardrails.
+
+    Guardrails are enforced in code, not just prompted: only allow-listed
+    actions run, the refund cap is a hard limit, and a cap breach routes the
+    ticket to human review instead of executing.
+    """
+    if action not in ACTIONS_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"Action not allow-listed: {action}")
+
+    if action == "refund":
+        if amount is not None and amount > REFUND_INR_CAP:
+            log_audit_action(
+                ticket.id,
+                "guardrail_violation",
+                {"action": "refund", "requested": amount, "cap": REFUND_INR_CAP},
+                ticket.confidence,
+            )
+            return {
+                "status": "draft_for_review",
+                "decision": "draft_for_review",
+                "draft_response": (
+                    f"Refund request of ₹{amount} exceeds the ₹{REFUND_INR_CAP} cap. "
+                    "Routed to human review for approval."
+                ),
+            }
+        payload = {"refund_amount": amount, "refund_currency": "INR", "refund_status": "processed"}
+        log_audit_action(ticket.id, "refund_executed", payload, ticket.confidence)
+        return {
+            "status": "auto_resolved",
+            "decision": "auto_resolve",
+            "draft_response": f"Refund of ₹{amount} processed successfully.",
         }
-        
-        # Apply agent decisions for resume
-        if agent_decision == "approve" and edited_draft:
-            # Agent approved and sent the draft
-            initial_state["draft_response"] = edited_draft
-            initial_state["status"] = "resolved"
-        elif agent_decision == "edit" and edited_draft:
-            # Agent edited the draft - use the edited version
-            initial_state["draft_response"] = edited_draft
-            initial_state["status"] = "draft_for_review"
-        elif agent_decision == "reject":
-            # Agent rejected the draft - escalate
-            initial_state["decision"] = "escalate"
-            initial_state["status"] = "escalated"
-        
-        # Phase 7: Action layer - tool calling with guardrails in INR
-        if action and action in ACTIONS_ALLOWED:
-            guardrail_violation = False
-            action_payload = {}
-            
-            if action == "refund":
-                # Guardrail: rupee cap enforcement
-                if action_amount is not None and action_amount > REFUND_INR_CAP:
-                    guardrail_violation = True
-                    initial_state["decision"] = "draft_for_review"
-                    initial_state["draft_response"] = f"""Refund request of ₹{action_amount} exceeds the ₹{REFUND_INR_CAP} cap.
-This has been routed to human review for approval.
-Please provide additional justification for the excess amount."""
-                else:
-                    # Successful refund under cap
-                    action_payload = {
-                        "refund_amount": action_amount,
-                        "refund_currency": "INR",
-                        "refund_status": "processed",
-                    }
-                    initial_state["status"] = "auto_resolved"
-                    initial_state["decision"] = "auto_resolve"
-                    log_audit_action(ticket.id, "refund_executed", action_payload, ticket.confidence)
-            elif action == "order_status":
-                # Allow-listed action: order status lookup
-                action_payload = {
-                    "action": "order_status_lookup",
-                    "status": "shipped",
-                    "estimated_delivery": "2024-12-20",
-                }
-                initial_state["status"] = "auto_resolved"
-                initial_state["decision"] = "auto_resolve"
-                log_audit_action(ticket.id, "order_status_checked", action_payload, ticket.confidence)
-            elif action == "password_reset":
-                # Allow-listed action: password reset
-                action_payload = {
-                    "action": "password_reset_initiated",
-                    "temp_password": "Temp@1234",
-                    "reset_url": "https://resolveai.com/reset-password",
-                }
-                initial_state["status"] = "auto_resolved"
-                initial_state["decision"] = "auto_resolve"
-                log_audit_action(ticket.id, "password_reset_executed", action_payload, ticket.confidence)
-            
-            # If guardrail violation for refund, don't execute action
-            if guardrail_violation:
-                initial_state["status"] = "draft_for_review"
-                initial_state["decision"] = "draft_for_review"
-        
-        config = {"configurable": {"thread_id": str(ticket.id)}}
-        
-        # If we have a decision already, resume from where it left off
-        if agent_decision in ("approve", "edit", "reject") or (action and action in ACTIONS_ALLOWED):
-            # Resume the graph with the agent's decision
-            result = graph.invoke(initial_state, config=config)
-        else:
-            # Fresh graph run
-            result = graph.invoke(initial_state, config=config)
-        
-        logger.info(f"Graph result for ticket {ticket.id}: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"Graph run failed for ticket {ticket.id}: {e}", exc_info=True)
-        raise
+
+    if action == "order_status":
+        log_audit_action(
+            ticket.id, "order_status_checked", {"action": "order_status_lookup"}, ticket.confidence
+        )
+        return {
+            "status": "auto_resolved",
+            "decision": "auto_resolve",
+            "draft_response": "Order status retrieved and shared with the customer.",
+        }
+
+    log_audit_action(
+        ticket.id, "password_reset_executed", {"action": "password_reset_initiated"}, ticket.confidence
+    )
+    return {
+        "status": "auto_resolved",
+        "decision": "auto_resolve",
+        "draft_response": "Password reset link dispatched to the customer.",
+    }
 
 
 @router.post("", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)
@@ -220,7 +228,6 @@ async def create_ticket(
     # Trigger graph run in a thread pool — run_ticket_graph is synchronous and
     # performs blocking LLM calls. Running it directly in this async route would
     # block the FastAPI event loop for the full LLM round-trip (3–10s).
-    import asyncio
     try:
         result = await asyncio.to_thread(run_ticket_graph, ticket)
         print(f"GRAPH RESULT: {result}")
@@ -305,35 +312,28 @@ async def approve_draft(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    # Run graph with approve decision
-    result = run_ticket_graph(ticket, agent_decision="approve", edited_draft=ticket.draft_response)
-    
-    # Log agent feedback
-    async with AsyncSessionLocal() as feedback_db:
-        feedback = AgentFeedback(
-            ticket_id=ticket.id,
-            original_draft=ticket.draft_response or "",
-            edited_response=ticket.draft_response or "",
-            agent_id="agent_1",  # In production, use actual agent ID
-        )
-        feedback_db.add(feedback)
-        await feedback_db.commit()
-    
-    # Also log to audit_log
-    async with AsyncSessionLocal() as audit_db:
-        from sqlalchemy import insert as sa_insert
-        await audit_db.execute(
-            sa_insert(AuditLog.__table__).values(
-                id=uuid4(),
-                ticket_id=ticket.id,
-                action="draft_approved",
-                payload={"draft": ticket.draft_response},
-                confidence=ticket.confidence,
-                executed_by="agent_1",
-            )
-        )
-        await audit_db.commit()
-    
+    original_draft = ticket.draft_response or ""
+
+    # Resume the paused graph with the agent's approval
+    result = await asyncio.to_thread(resume_ticket_graph, ticket, "approve")
+    apply_graph_result(ticket, result)
+    final_response = result.get("draft_response") or original_draft
+
+    if final_response:
+        db.add(TicketMessage(id=uuid4(), ticket_id=ticket.id, role="agent", content=final_response))
+
+    # Capture the agent decision for the feedback loop
+    db.add(AgentFeedback(
+        ticket_id=ticket.id,
+        original_draft=original_draft,
+        edited_response=final_response,
+        agent_id="agent_1",  # In production, use actual agent ID
+    ))
+    log_audit_action(
+        ticket.id, "draft_approved", {"draft": final_response}, ticket.confidence, executed_by="agent_1"
+    )
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
 
@@ -350,20 +350,28 @@ async def edit_draft(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    # Run graph with edit decision and edited draft
-    result = run_ticket_graph(ticket, agent_decision="edit", edited_draft=edited_draft)
-    
-    # Log agent feedback - original vs edited
-    async with AsyncSessionLocal() as feedback_db:
-        feedback = AgentFeedback(
-            ticket_id=ticket.id,
-            original_draft=ticket.draft_response or "",
-            edited_response=edited_draft,
-            agent_id="agent_1",  # In production, use actual agent ID
-        )
-        feedback_db.add(feedback)
-        await feedback_db.commit()
-    
+    original_draft = ticket.draft_response or ""
+
+    # Resume the paused graph with the agent's edited response
+    result = await asyncio.to_thread(resume_ticket_graph, ticket, "edit", edited_draft)
+    apply_graph_result(ticket, result)
+    final_response = result.get("draft_response") or edited_draft
+
+    if final_response:
+        db.add(TicketMessage(id=uuid4(), ticket_id=ticket.id, role="agent", content=final_response))
+
+    # Capture original draft vs. the agent's final version for the feedback loop
+    db.add(AgentFeedback(
+        ticket_id=ticket.id,
+        original_draft=original_draft,
+        edited_response=final_response,
+        agent_id="agent_1",  # In production, use actual agent ID
+    ))
+    log_audit_action(
+        ticket.id, "draft_edited", {"draft": final_response}, ticket.confidence, executed_by="agent_1"
+    )
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
 
@@ -379,20 +387,21 @@ async def reject_draft(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    # Run graph with reject decision
-    result = run_ticket_graph(ticket, agent_decision="reject")
-    
-    # Log agent feedback
-    async with AsyncSessionLocal() as feedback_db:
-        feedback = AgentFeedback(
-            ticket_id=ticket.id,
-            original_draft=ticket.draft_response or "",
-            edited_response=ticket.draft_response or "",
-            agent_id="agent_1",  # In production, use actual agent ID
-        )
-        feedback_db.add(feedback)
-        await feedback_db.commit()
-    
+    # Resume the paused graph with the agent's rejection
+    result = await asyncio.to_thread(resume_ticket_graph, ticket, "reject")
+    apply_graph_result(ticket, result)
+
+    db.add(AgentFeedback(
+        ticket_id=ticket.id,
+        original_draft=ticket.draft_response or "",
+        edited_response="",
+        agent_id="agent_1",  # In production, use actual agent ID
+    ))
+    log_audit_action(
+        ticket.id, "draft_rejected", {"draft": ticket.draft_response}, ticket.confidence, executed_by="agent_1"
+    )
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
 
@@ -409,9 +418,11 @@ async def process_refund(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    # Run graph with refund action (INR cap enforced in guardrail)
-    result = run_ticket_graph(ticket, action="refund", action_amount=refund_action.amount)
-    
+    # Execute refund action with the ₹2000 cap guardrail enforced in code
+    result = execute_action(ticket, "refund", refund_action.amount)
+    apply_graph_result(ticket, result)
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
 
@@ -427,9 +438,11 @@ async def check_order_status(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    # Run graph with order_status action
-    result = run_ticket_graph(ticket, action="order_status")
-    
+    # Execute allow-listed order status lookup
+    result = execute_action(ticket, "order_status")
+    apply_graph_result(ticket, result)
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
 
@@ -445,9 +458,11 @@ async def initiate_password_reset(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
-    # Run graph with password_reset action
-    result = run_ticket_graph(ticket, action="password_reset")
-    
+    # Execute allow-listed password reset
+    result = execute_action(ticket, "password_reset")
+    apply_graph_result(ticket, result)
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
 

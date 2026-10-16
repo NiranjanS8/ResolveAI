@@ -1,5 +1,6 @@
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import interrupt, Command
 from app.core.config import settings
 from app.graphs.state import TicketState
 from app.schemas.classification import ClassificationOutput
@@ -271,7 +272,7 @@ Please review this draft and either approve it for sending, edit it before sendi
         "decision": decision,
         "confidence": str(confidence),
         "draft_response": draft_response,
-        "status": "deciding",
+        "status": "draft_for_review" if decision == "draft_for_review" else "deciding",
     }
 
 
@@ -283,20 +284,35 @@ def auto_resolve_node(state: TicketState) -> TicketState:
 
 
 def draft_for_review_node(state: TicketState) -> TicketState:
-    """Draft for review node - generates AI draft and pauses graph via interrupt().
-    
-    The graph execution will pause here and wait for the agent to:
-    - Approve the draft (ticket resolves)
-    - Edit the draft (ticket continues with edited response)
-    - Reject the draft (ticket escalates)
+    """Pause the graph for human review via interrupt().
+
+    Execution stops here and the run waits in a "waiting" state (persisted by
+    the checkpointer) until the agent resumes it with a decision:
+    - "approve": send the AI draft as-is; ticket resolves.
+    - "edit": send the agent's edited_response; ticket resolves.
+    - "reject": discard the draft; ticket escalates to a human.
     """
-    # The draft_response should already be set by decide_node
-    # This node just ensures the status is set correctly
-    # The actual interrupt() is handled by the graph runtime
-    return {
-        **state,
-        "status": "draft_for_review",
-    }
+    review = interrupt({
+        "type": "draft_review",
+        "ticket_id": state.get("ticket_id"),
+        "intent": state.get("intent"),
+        "urgency": state.get("urgency"),
+        "draft_response": state.get("draft_response"),
+    })
+
+    review = review or {}
+    action = review.get("action", "reject")
+
+    if action == "approve":
+        return {**state, "status": "resolved", "decision": "approved"}
+    if action == "edit":
+        return {
+            **state,
+            "status": "resolved",
+            "decision": "edited",
+            "draft_response": review.get("edited_response") or state.get("draft_response"),
+        }
+    return {**state, "status": "escalated", "decision": "rejected"}
 
 
 def escalate_node(state: TicketState) -> TicketState:
