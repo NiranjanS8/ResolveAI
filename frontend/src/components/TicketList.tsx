@@ -167,7 +167,7 @@ export const TicketList: React.FC<TicketListProps> = ({
       </div>
 
       {/* ── Ticket rows ────────────────────────── */}
-      <div className="flex-1 overflow-y-auto" style={{ divideColor: 'var(--border)' }}>
+      <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <div className="p-10 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
             No tickets match your filters.

@@ -20,7 +20,6 @@ interface ActionButtonsProps {
  * only exposes guardrailed tool calls: Refund, Order Status, Password Reset.
  */
 export const ActionButtons: React.FC<ActionButtonsProps> = ({
-  ticket,
   onRefund,
   onOrderStatus,
   onPasswordReset,
