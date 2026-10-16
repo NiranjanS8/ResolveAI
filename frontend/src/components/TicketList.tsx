@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { type Ticket, type Channel } from '../api/tickets';
+import { Icon } from './Icon';
 
 interface TicketListProps {
   tickets: Ticket[];
@@ -93,14 +94,11 @@ export const TicketList: React.FC<TicketListProps> = ({
 
         {/* Search */}
         <div className="relative">
-          <svg
-            className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+          <Icon
+            name="search"
+            size={14}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--text-muted)]"
+          />
           <input
             id="ticket-search-input"
             type="text"
@@ -117,10 +115,11 @@ export const TicketList: React.FC<TicketListProps> = ({
           {searchTerm && (
             <button
               onClick={() => setSearchTerm('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-sm"
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2"
               style={{ color: 'var(--text-muted)' }}
             >
-              ×
+              <Icon name="close" size={13} />
             </button>
           )}
         </div>
@@ -198,7 +197,7 @@ export const TicketList: React.FC<TicketListProps> = ({
                       {ticket.customer_id}
                     </span>
                     <span
-                      className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded-sm"
+                      className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded-sm whitespace-nowrap"
                       style={{
                         backgroundColor: ticket.channel === 'email' ? 'var(--green-dim)' : 'var(--accent-dim)',
                         color: ticket.channel === 'email' ? 'var(--green)' : 'var(--accent)',
@@ -233,7 +232,7 @@ export const TicketList: React.FC<TicketListProps> = ({
                     />
                     {/* Status badge */}
                     <span
-                      className="text-xs px-2 py-0.5 rounded-full font-medium"
+                      className="text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap"
                       style={{ backgroundColor: cfg.bg, color: cfg.color }}
                     >
                       {cfg.label}
@@ -241,7 +240,7 @@ export const TicketList: React.FC<TicketListProps> = ({
                     {/* Intent tag */}
                     {ticket.intent && (
                       <span
-                        className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                        className="text-[10px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap"
                         style={{
                           backgroundColor: 'var(--bg-elevated)',
                           color: 'var(--text-muted)',
@@ -278,7 +277,10 @@ export const TicketList: React.FC<TicketListProps> = ({
         style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)' }}
       >
         <span>{filtered.length} / {tickets.length} tickets</span>
-        <span style={{ color: 'var(--green)' }}>● live</span>
+        <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--green)' }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--green)' }} />
+          live
+        </span>
       </div>
     </div>
   );

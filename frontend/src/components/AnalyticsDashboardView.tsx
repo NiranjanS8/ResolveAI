@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getAnalytics, type AnalyticsData } from '../api/tickets';
 import { AnalyticsChart } from './AnalyticsChart';
+import { Icon } from './Icon';
 
 export const AnalyticsDashboardView: React.FC = () => {
   const [range, setRange] = useState<'24h' | '7d' | '30d'>('30d');
@@ -21,7 +22,7 @@ export const AnalyticsDashboardView: React.FC = () => {
   }, [range]);
 
   return (
-    <div className="space-y-6 animate-fade-in" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>
+    <div className="space-y-6 animate-fade-in">
       {/* Executive Controls & Time Filter */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[var(--border-hairline)]">
         <div>
@@ -62,8 +63,9 @@ export const AnalyticsDashboardView: React.FC = () => {
           borderLeft: '4px solid var(--accent)',
         }}
       >
-        <span className="text-[0.6875rem] font-mono text-[var(--accent)] uppercase font-semibold block mb-1">
-          ★ Executive ROI Summary
+        <span className="flex items-center gap-1.5 text-[0.6875rem] font-mono text-[var(--accent)] uppercase font-semibold mb-1">
+          <Icon name="star" size={12} />
+          Executive ROI Summary
         </span>
         <p className="text-sm text-[var(--text-primary)] font-medium leading-relaxed">
           {loading ? 'Recalculating model telemetry & ROI metrics...' : (data?.executive_summary || 'Calculating system efficiency metrics...')}

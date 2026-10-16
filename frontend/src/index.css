@@ -1,7 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
 @theme {
+  --font-sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
   --color-bg-base: #0F1117;
   --color-bg-surface: #161B22;
   --color-bg-elevated: #1C2128;
@@ -96,7 +97,7 @@
   html { font-size: 14px; }
 
   body {
-    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    font-family: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
     background-color: var(--bg-base);
     color: var(--text-primary);
     line-height: 1.5;
@@ -105,7 +106,7 @@
   }
 
   code, pre, kbd, samp {
-    font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    font-family: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
     font-size: 0.875em;
   }
 
@@ -121,8 +122,11 @@
     font-family: inherit;
   }
 
-  input:focus, textarea:focus {
-    outline: none;
+  /* Keyboard focus stays perceivable on the dark palette; components that set
+     their own focus border still inherit this outline as a second cue. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 
@@ -152,11 +156,25 @@
 .animate-pulse-dot { animation: pulseDot 2s ease infinite; }
 
 /* ─── Utility classes ────────────────────────────────────── */
-.font-mono { font-family: 'JetBrains Mono', monospace; }
+.font-mono { font-family: 'IBM Plex Mono', monospace; }
 
-.glass {
-  background: rgba(22, 27, 34, 0.8);
-  backdrop-filter: blur(12px);
+/* ─── Queue / detail split layout ────────────────────────── */
+.queue-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 340px 1fr;
+  height: calc(100vh - 120px);
+}
+
+@media (max-width: 900px) {
+  .queue-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .queue-layout > * {
+    min-height: min(70vh, 520px);
+  }
 }
 
 /* ─── Status badge colors ────────────────────────────────── */

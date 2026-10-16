@@ -1,4 +1,5 @@
 import React from 'react';
+import { Icon } from './Icon';
 
 export interface ToastMessage {
   id: string;
@@ -15,10 +16,7 @@ export const ToastContainer: React.FC<ToastProps> = ({ toasts, onDismiss }) => {
   if (toasts.length === 0) return null;
 
   return (
-    <div
-      className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none"
-      style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
-    >
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
       {toasts.map((toast) => {
         const borderCol =
           toast.type === 'success'
@@ -34,8 +32,8 @@ export const ToastContainer: React.FC<ToastProps> = ({ toasts, onDismiss }) => {
             key={toast.id}
             className="pointer-events-auto p-3 rounded-[4px] bg-[var(--bg-surface)] border shadow-lg text-xs animate-fade-in flex items-start justify-between gap-3"
             style={{
+              border: '1px solid var(--border-hairline)',
               borderLeft: `4px solid ${borderCol}`,
-              borderColor: 'var(--border-hairline)',
             }}
           >
             <div className="flex-1">
@@ -48,9 +46,10 @@ export const ToastContainer: React.FC<ToastProps> = ({ toasts, onDismiss }) => {
             </div>
             <button
               onClick={() => onDismiss(toast.id)}
-              className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs"
+              aria-label="Dismiss notification"
+              className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
-              ✕
+              <Icon name="close" size={13} />
             </button>
           </div>
         );

@@ -21,6 +21,7 @@ import { TicketDetailPane } from '../components/TicketDetailPane';
 import { TicketForm } from '../components/TicketForm';
 import { AnalyticsDashboardView } from '../components/AnalyticsDashboardView';
 import { ToastContainer, type ToastMessage } from '../components/Toast';
+import { Icon } from '../components/Icon';
 
 export const HomePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'queue' | 'analytics'>('queue');
@@ -208,7 +209,7 @@ export const HomePage: React.FC = () => {
 
       {/* Stats sub-bar — compact, single line */}
       <div
-        className="px-5 py-1.5 flex items-center gap-6 text-xs font-mono"
+        className="px-5 py-1.5 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs font-mono"
         style={{ backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border)' }}
       >
         <span style={{ color: 'var(--text-muted)' }}>
@@ -247,11 +248,7 @@ export const HomePage: React.FC = () => {
           </div>
         ) : activeTab === 'queue' ? (
           <div
-            className="grid gap-4"
-            style={{
-              gridTemplateColumns: '340px 1fr',
-              height: 'calc(100vh - 120px)',
-            }}
+            className="queue-layout"
           >
             {/* Left: Queue pane */}
             <div className="overflow-hidden flex flex-col">
@@ -288,10 +285,10 @@ export const HomePage: React.FC = () => {
                   }}
                 >
                   <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 text-2xl"
-                    style={{ backgroundColor: 'var(--bg-elevated)' }}
+                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
+                    style={{ backgroundColor: 'var(--bg-elevated)', color: 'var(--text-muted)' }}
                   >
-                    📋
+                    <Icon name="inbox" size={22} />
                   </div>
                   <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>
                     No ticket selected

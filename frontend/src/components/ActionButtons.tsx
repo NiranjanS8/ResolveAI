@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { type Ticket } from '../api/tickets';
+import { Icon } from './Icon';
 
 interface ActionButtonsProps {
   ticket: Ticket;
@@ -115,13 +116,14 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
               Guardrailed Refund (INR)
             </span>
             <span
-              className="px-2 py-0.5 rounded-full font-medium font-mono"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium font-mono"
               style={{
                 backgroundColor: exceedsCap ? 'var(--red-dim)'    : 'var(--green-dim)',
                 color:           exceedsCap ? 'var(--red)'        : 'var(--green)',
               }}
             >
-              {exceedsCap ? '⚠ Exceeds ₹2,000 cap — requires supervisor' : '✓ Within ₹2,000 auto-cap'}
+              <Icon name={exceedsCap ? 'alert' : 'check'} size={12} />
+              {exceedsCap ? 'Exceeds ₹2,000 cap — requires supervisor' : 'Within ₹2,000 auto-cap'}
             </span>
           </div>
 

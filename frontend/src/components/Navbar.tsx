@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Icon } from './Icon';
 
 interface NavbarProps {
   activeTab: 'queue' | 'analytics';
@@ -105,6 +106,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={onRefresh}
             title={isBackendConnected ? 'Live backend' : 'Demo mode — click to retry'}
+            aria-label={isBackendConnected ? 'Backend live — refresh' : 'Demo mode — click to retry'}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors"
             style={{
               backgroundColor: 'var(--bg-elevated)',
@@ -126,15 +128,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             id="btn-toggle-theme"
             onClick={toggleTheme}
-            aria-label="Toggle theme"
-            className="w-8 h-8 rounded-md flex items-center justify-center text-sm transition-colors"
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            className="w-8 h-8 rounded-md flex items-center justify-center transition-colors"
             style={{
               backgroundColor: 'var(--bg-elevated)',
               color: 'var(--text-secondary)',
               border: '1px solid var(--border)',
             }}
           >
-            {theme === 'dark' ? '☀️' : '🌙'}
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
           </button>
 
           {/* New Ticket */}
@@ -146,7 +148,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               background: 'linear-gradient(135deg, var(--accent) 0%, #4A9AFF 100%)',
             }}
           >
-            <span>+</span>
+            <Icon name="plus" size={14} />
             <span>Ingest Ticket</span>
           </button>
         </div>

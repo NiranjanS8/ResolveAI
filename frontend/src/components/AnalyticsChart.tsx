@@ -26,7 +26,6 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     return (
       <div
         className="p-4 bg-[var(--bg-surface)] rounded-[4px] border border-[var(--border-hairline)] space-y-3"
-        style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-semibold text-[var(--text-primary)]">{title}</h3>
@@ -67,7 +66,6 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     return (
       <div
         className="p-4 bg-[var(--bg-surface)] rounded-[4px] border border-[var(--border-hairline)] space-y-3"
-        style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
       >
         <div className="flex items-center justify-between">
           <div>
@@ -110,7 +108,6 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
   return (
     <div
       className="p-4 bg-[var(--bg-surface)] rounded-[4px] border border-[var(--border-hairline)] space-y-3"
-      style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
     >
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold text-[var(--text-primary)]">{title}</h3>

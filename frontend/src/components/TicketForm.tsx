@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { type TicketCreate, type Channel } from '../api/tickets';
+import { Icon } from './Icon';
 
 interface TicketFormProps {
   onSubmit: (ticket: TicketCreate) => Promise<void> | void;
@@ -59,6 +60,15 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpenAsModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel?.();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpenAsModal, onCancel]);
+
   const applyPreset = (preset: typeof PRESETS[0]) => {
     setFormData({
       customer_id: preset.customer_id,
@@ -95,7 +105,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   const formContent = (
     <div
       className="p-5 bg-[var(--bg-surface)] border border-[var(--border-hairline)] rounded-[4px] space-y-4"
-      style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
     >
       <div className="flex items-center justify-between pb-3 border-b border-[var(--border-hairline)]">
         <div>
@@ -109,9 +118,10 @@ export const TicketForm: React.FC<TicketFormProps> = ({
         {onCancel && (
           <button
             onClick={onCancel}
-            className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            aria-label="Close ticket form"
+            className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           >
-            ✕
+            <Icon name="close" size={15} />
           </button>
         )}
       </div>
@@ -236,8 +246,20 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
-      <div className="w-full max-w-xl shadow-xl">{formContent}</div>
+    <div
+      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel?.();
+      }}
+    >
+      <div
+        className="w-full max-w-xl shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ingest support ticket"
+      >
+        {formContent}
+      </div>
     </div>
   );
 };

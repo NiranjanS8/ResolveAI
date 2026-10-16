@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Icon } from './Icon';
 
 interface DraftCardProps {
   draftResponse: string | null | undefined;
@@ -52,10 +53,11 @@ export const DraftCard: React.FC<DraftCardProps> = ({
       >
         <div className="flex items-center gap-2">
           <span
-            className="text-xs font-mono font-semibold uppercase tracking-wider"
+            className="flex items-center gap-1.5 text-xs font-mono font-semibold uppercase tracking-wider"
             style={{ color: 'var(--accent)' }}
           >
-            ⚡ AI Draft Response
+            <Icon name="sparkle" size={13} />
+            AI Draft Response
           </span>
           {intent && (
             <span
@@ -132,7 +134,7 @@ export const DraftCard: React.FC<DraftCardProps> = ({
                     className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded-md font-medium text-white transition-opacity hover:opacity-90"
                     style={{ backgroundColor: 'var(--green)' }}
                   >
-                    <span>✓</span> Approve & Send
+                    <Icon name="check" size={14} /> Approve & Send
                   </button>
                 )}
                 {onEdit && (

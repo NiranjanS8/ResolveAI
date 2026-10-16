@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { type Ticket } from '../api/tickets';
 import { DraftCard } from './DraftCard';
 import { ActionButtons } from './ActionButtons';
+import { Icon } from './Icon';
 
 interface TicketDetailPaneProps {
   ticket: Ticket;
@@ -105,10 +106,11 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
             {onClose && (
               <button
                 onClick={onClose}
-                className="w-6 h-6 rounded flex items-center justify-center text-sm transition-colors"
+                aria-label="Close ticket detail"
+                className="w-6 h-6 rounded flex items-center justify-center transition-colors"
                 style={{ color: 'var(--text-muted)' }}
               >
-                ✕
+                <Icon name="close" size={14} />
               </button>
             )}
           </div>
@@ -232,7 +234,12 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
                       >
                         <span style={{ color: isAI ? 'var(--accent)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           {isCustomer ? ticket.customer_id :
-                           isAI       ? '⚡ ResolveAI' :
+                           isAI       ? (
+                             <span className="inline-flex items-center gap-1">
+                               <Icon name="sparkle" size={12} />
+                               ResolveAI
+                             </span>
+                           ) :
                            isSystem   ? 'System' : 'Agent'}
                         </span>
                         <span className="font-mono">
