@@ -149,7 +149,7 @@ export const TicketList: React.FC<TicketListProps> = ({
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <p className="px-4 py-10 text-center text-[13px]" style={{ color: 'var(--text-secondary)' }}>
-            No tickets match these filters.
+            {tickets.length === 0 ? 'No tickets in the queue.' : 'No tickets match these filters.'}
           </p>
         ) : (
           filtered.map((ticket) => {
