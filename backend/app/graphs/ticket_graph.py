@@ -6,6 +6,7 @@ from app.schemas.classification import ClassificationOutput
 from app.core.model_registry import get_model_config
 from app.core.llm import create_llm
 from app.db.session import SyncSessionLocal, AsyncSessionLocal
+from app.models.base import ProviderCall
 from uuid import uuid4
 import time
 import json
