@@ -16,3 +16,4 @@ langchain-openai==1.7.0
 langchain-mistralai==1.1.6
 langchain-google-genai==4.4.2
 pgvector==0.5.1
+markdown-it-py==3.0.0

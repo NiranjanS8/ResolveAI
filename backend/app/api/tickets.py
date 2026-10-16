@@ -10,8 +10,10 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db
 from app.core.audit import log_audit_action
+from app.core.outbound import INBOUND_ROLES, send_customer_message
 from app.graphs import get_compiled_graph
 from app.graphs.state import TicketState
+from app.graphs.ticket_graph import DRAFT_PROMPT_VERSION
 from app.models.base import Ticket, TicketMessage, TicketStatus, AgentFeedback
 from app.schemas.ticket import (
     TicketCreate,
@@ -302,17 +304,32 @@ async def add_message(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    message = TicketMessage(
-        id=uuid4(),
-        ticket_id=ticket.id,
+    # Inbound text is the customer's own words: stored verbatim. Anything we
+    # send out is sanitized by the send boundary, whatever the role.
+    if message_in.role in INBOUND_ROLES:
+        message = TicketMessage(
+            id=uuid4(),
+            ticket_id=ticket.id,
+            role=message_in.role,
+            content=message_in.content,
+            meta=message_in.meta,
+        )
+        db.add(message)
+        await db.commit()
+        await db.refresh(message)
+        return message
+
+    sent = send_customer_message(
+        ticket.id,
+        message_in.content,
         role=message_in.role,
-        content=message_in.content,
-        meta=message_in.meta,
+        source="agent_message",
+        agent_id=(message_in.meta or {}).get("agent_id"),
     )
-    db.add(message)
-    await db.commit()
-    await db.refresh(message)
-    return message
+    stored = await db.get(TicketMessage, sent.message_id)
+    if stored is None:
+        raise HTTPException(status_code=500, detail="Message was not persisted")
+    return stored
 
 
 @router.post("/{ticket_id}/approve", response_model=TicketResponse)
@@ -335,7 +352,14 @@ async def approve_draft(
     final_response = result.get("draft_response") or original_draft
 
     if final_response:
-        db.add(TicketMessage(id=uuid4(), ticket_id=ticket.id, role="agent", content=final_response))
+        send_customer_message(
+            ticket.id,
+            final_response,
+            role="agent",
+            source="ai_draft_approved",
+            prompt_version=DRAFT_PROMPT_VERSION,
+            agent_id="agent_1",
+        )
 
     # Capture the agent decision for the feedback loop
     db.add(AgentFeedback(
@@ -375,7 +399,14 @@ async def edit_draft(
     final_response = result.get("draft_response") or edited_draft
 
     if final_response:
-        db.add(TicketMessage(id=uuid4(), ticket_id=ticket.id, role="agent", content=final_response))
+        send_customer_message(
+            ticket.id,
+            final_response,
+            role="agent",
+            source="agent_edit",
+            prompt_version=DRAFT_PROMPT_VERSION,
+            agent_id="agent_1",
+        )
 
     # Capture original draft vs. the agent's final version for the feedback loop
     db.add(AgentFeedback(
@@ -502,14 +533,23 @@ async def process_email(
         raise HTTPException(status_code=400, detail="Ticket is not an email-channel ticket")
 
     if message_in is not None:
-        db.add(TicketMessage(
-            id=uuid4(),
-            ticket_id=ticket.id,
-            role=message_in.role,
-            content=message_in.content,
-            meta=message_in.meta,
-        ))
-        await db.commit()
+        if message_in.role in INBOUND_ROLES:
+            db.add(TicketMessage(
+                id=uuid4(),
+                ticket_id=ticket.id,
+                role=message_in.role,
+                content=message_in.content,
+                meta=message_in.meta,
+            ))
+            await db.commit()
+        else:
+            send_customer_message(
+                ticket.id,
+                message_in.content,
+                role=message_in.role,
+                source="email_thread",
+                agent_id=(message_in.meta or {}).get("agent_id"),
+            )
 
         # Re-run the graph on the updated thread so the reply is classified and routed.
         result = await asyncio.to_thread(run_ticket_graph, ticket)

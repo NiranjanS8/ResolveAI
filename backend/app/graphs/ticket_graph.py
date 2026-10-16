@@ -3,9 +3,11 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import interrupt, Command
 from app.core.config import settings
 from app.graphs.state import TicketState
-from app.schemas.classification import ClassificationOutput
+from app.schemas.classification import ClassificationOutput, DraftOutput
 from app.core.model_registry import get_model_config
 from app.core.llm import create_llm
+from app.core.outbound import record_generated_deviation, send_customer_message
+from app.core.text_format import sanitize_outbound
 from app.db.session import SyncSessionLocal, AsyncSessionLocal
 from app.models.base import ProviderCall
 from uuid import uuid4
@@ -42,13 +44,19 @@ Report confidence honestly. It decides whether a customer reply is sent automati
 Do not default to a high number: vague or underspecified tickets must score below 0.70."""
 
 
-DRAFT_PROMPT = """You are a customer support agent for an e-commerce company. Write the reply that will be sent to the customer.
+DRAFT_PROMPT_VERSION = "draft-plain-v1"
+
+PLAIN_TEXT_RULES = """Write plain text only. No Markdown: no asterisks, underscores for emphasis, backticks, # headings, or table syntax. For lists use numbered lines like "1." or short separate sentences. Do not use emojis."""
+
+
+DRAFT_PROMPT = f"""You are a customer support agent for an e-commerce company. Write the reply that will be sent to the customer.
 
 Requirements:
 - Be concise and friendly (at most about 150 words).
 - Address the customer's actual request directly; acknowledge their tone.
 - Rely only on the knowledge base excerpts provided. Never invent policies, prices, dates, or promises.
 - If the excerpts do not cover the request, say a specialist will follow up shortly instead of guessing.
+- {PLAIN_TEXT_RULES}
 - Sign off as "ResolveAI Support"."""
 
 
@@ -207,11 +215,18 @@ def _knowledge_excerpts(state: TicketState) -> str:
 
 
 def _generate_draft(state: TicketState, intent: str) -> str:
-    """Draft a customer reply with the drafter model, grounded in retrieval."""
+    """Draft a customer reply with the drafter model, grounded in retrieval.
+
+    Structured output returns the body and nothing else, so the raw reply cannot
+    arrive wrapped in commentary that we would have to strip.
+    """
     config = get_model_config("drafter")
-    llm = create_llm(config)
+    llm = create_llm(config).with_structured_output(DraftOutput)
     if config.fallback:
-        llm = llm.with_fallbacks([create_llm(config.fallback)], exception_type=Exception)
+        llm = llm.with_fallbacks(
+            [create_llm(config.fallback).with_structured_output(DraftOutput)],
+            exception_type=Exception,
+        )
 
     request = (
         f"Subject: {state.get('subject', '')}\n"
@@ -222,7 +237,7 @@ def _generate_draft(state: TicketState, intent: str) -> str:
     )
 
     start = time.perf_counter()
-    reply = llm.invoke([("system", DRAFT_PROMPT), ("human", request)])
+    result = llm.invoke([("system", DRAFT_PROMPT), ("human", request)])
     latency_ms = int((time.perf_counter() - start) * 1000)
 
     with SyncSessionLocal() as db:
@@ -236,10 +251,25 @@ def _generate_draft(state: TicketState, intent: str) -> str:
         ))
         db.commit()
 
-    content = reply.content
-    if isinstance(content, list):
-        content = " ".join(str(part) for part in content)
-    return str(content).strip()
+    return str(result.body).strip()
+
+
+def _sanitize_draft(state: TicketState, draft: str) -> str:
+    """Store the exact text that will be sent, counting any markup the model emitted.
+
+    Sanitizing at generation time keeps the agent dashboard honest: the draft on
+    screen is the plain text the customer receives. The send boundary sanitizes
+    again, so a human pasting Markdown is still caught.
+    """
+    result = sanitize_outbound(draft)
+    if result.changed:
+        record_generated_deviation(
+            state.get("ticket_id"),
+            result.markers,
+            source="ai_draft",
+            prompt_version=DRAFT_PROMPT_VERSION,
+        )
+    return result.text
 
 
 def _fallback_draft(state: TicketState, intent: str) -> str:
@@ -284,6 +314,7 @@ def decide_node(state: TicketState) -> TicketState:
             draft_response = _generate_draft(state, intent)
         except Exception:
             draft_response = _fallback_draft(state, intent)
+        draft_response = _sanitize_draft(state, draft_response)
 
     relevance = max(
         (chunk.get("score", 0.0) for chunk in state.get("retrieved_context", [])),
@@ -313,6 +344,16 @@ def auto_resolve_node(state: TicketState) -> TicketState:
         (chunk.get("score", 0.0) for chunk in state.get("retrieved_context", [])),
         default=0.0,
     )
+    reply = state.get("draft_response")
+    if reply:
+        send_customer_message(
+            state.get("ticket_id"),
+            reply,
+            role="agent",
+            source="auto_resolve",
+            prompt_version=DRAFT_PROMPT_VERSION,
+        )
+
     log_audit_action(
         state.get("ticket_id"),
         "auto_resolved",
@@ -321,7 +362,7 @@ def auto_resolve_node(state: TicketState) -> TicketState:
             "classifier_confidence": confidence,
             "retrieval_relevance": round(relevance, 4),
             "routing_score": state.get("routing_score"),
-            "reply_sent": bool(state.get("draft_response")),
+            "reply_sent": bool(reply),
         },
         confidence,
         executed_by="ticket_graph.auto_resolve_node",
