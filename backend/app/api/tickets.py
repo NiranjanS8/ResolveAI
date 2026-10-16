@@ -1,7 +1,7 @@
 from uuid import uuid4
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,7 +22,7 @@ from app.schemas.ticket import (
     PasswordResetAction,
     EmailAction,
 )
-from app.db.session import AsyncSessionLocal, SyncSessionLocal
+from app.db.session import SyncSessionLocal
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -470,35 +470,39 @@ async def initiate_password_reset(
 @router.post("/{ticket_id}/email", response_model=TicketResponse)
 async def process_email(
     ticket_id: str,
+    message_in: TicketMessageCreate | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Process an email-ticket - thread replies into existing tickets."""
+    """Thread an inbound email reply into an existing ticket and re-run the graph."""
     result = await db.execute(select(Ticket).where(Ticket.id == ticket_id))
     ticket = result.scalar_one_or_none()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
-    # Phase 10: If ticket already exists, add message and re-run graph
-    # If new email, create new ticket
-    if ticket.channel == "email" and ticket.status in ("new", "open"):
-        # Add email as a message to existing ticket
-        from sqlalchemy import insert as sa_insert
-        
-        # Check for replies/references
-        # In a full implementation, we'd parse email headers for threading
-        # For MVP, just add a note that this is an email reply
-        async with AsyncSessionLocal() as audit_db:
-            await audit_db.execute(
-                sa_insert(AuditLog.__table__).values(
-                    id=uuid4(),
-                    ticket_id=ticket.id,
-                    action="email_reply_threaded",
-                    payload={"note": "Email reply added to existing ticket"},
-                    confidence=ticket.confidence,
-                    executed_by="system",
-                )
-            )
-            await audit_db.commit()
-    
+
+    if ticket.channel != "email":
+        raise HTTPException(status_code=400, detail="Ticket is not an email-channel ticket")
+
+    if message_in is not None:
+        db.add(TicketMessage(
+            id=uuid4(),
+            ticket_id=ticket.id,
+            role=message_in.role,
+            content=message_in.content,
+            meta=message_in.meta,
+        ))
+        await db.commit()
+
+        # Re-run the graph on the updated thread so the reply is classified and routed.
+        result = await asyncio.to_thread(run_ticket_graph, ticket)
+        apply_graph_result(ticket, result)
+
+    log_audit_action(
+        ticket.id,
+        "email_reply_threaded",
+        {"threaded": message_in is not None},
+        ticket.confidence,
+    )
+
+    await db.commit()
     await db.refresh(ticket)
     return ticket
