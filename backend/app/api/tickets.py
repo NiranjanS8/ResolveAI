@@ -1,10 +1,8 @@
 from uuid import uuid4
 import asyncio
-import logging
 from collections import defaultdict, deque
 from time import monotonic
 from fastapi import APIRouter, Depends, HTTPException, status
-from langgraph.types import Command
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,8 +10,8 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_db
 from app.core.audit import log_audit_action
 from app.core.outbound import INBOUND_ROLES, send_customer_message
-from app.graphs import get_compiled_graph
-from app.graphs.state import TicketState
+from app.core.queue import enqueue_ticket_job
+from app.graphs.runner import apply_graph_result, resume_ticket_graph
 from app.graphs.ticket_graph import DRAFT_PROMPT_VERSION
 from app.models.base import Ticket, TicketMessage, TicketStatus, AgentFeedback
 from app.schemas.ticket import (
@@ -32,8 +30,6 @@ from app.schemas.ticket import (
 )
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
-
-logger = logging.getLogger(__name__)
 
 # Phase 7: Action constants in Indian Rupees (₹)
 # 1 INR ≈ 0.012 USD, so $50 ≈ ₹4150, using ₹2000 as the cap for MVP
@@ -55,8 +51,8 @@ _recent_submissions: dict[str, deque] = defaultdict(deque)
 def enforce_rate_limit(customer_id: str) -> None:
     """Sliding-window rate limit on ticket creation, keyed by customer.
 
-    In-process only (fine for the single-instance MVP); a multi-instance
-    deployment would move this counter into Redis.
+    In-process only (fine for the single-instance MVP); each additional process
+    would keep its own counter, so a multi-instance deployment needs a shared one.
     """
     now = monotonic()
     window = _recent_submissions[customer_id]
@@ -70,57 +66,6 @@ def enforce_rate_limit(customer_id: str) -> None:
     window.append(now)
 
 
-def apply_graph_result(ticket: Ticket, result: dict) -> None:
-    """Copy the relevant graph state fields back onto the ticket row."""
-    if result.get("intent"):
-        ticket.intent = result["intent"]
-    if result.get("urgency"):
-        ticket.urgency = result["urgency"]
-    if result.get("sentiment"):
-        ticket.sentiment = result["sentiment"]
-    if result.get("confidence"):
-        ticket.confidence = result["confidence"]
-    if result.get("status"):
-        ticket.status = TicketStatus(result["status"])
-    if result.get("draft_response") is not None:
-        ticket.draft_response = result["draft_response"]
-    if result.get("retrieved_context") is not None:
-        ticket.retrieved_context = result["retrieved_context"]
-
-
-def _initial_state(ticket: Ticket) -> TicketState:
-    return {
-        "ticket_id": str(ticket.id),
-        "customer_id": ticket.customer_id,
-        "subject": ticket.subject,
-        "body": ticket.body,
-        "status": ticket.status.value if hasattr(ticket.status, "value") else str(ticket.status),
-        "intent": ticket.intent,
-        "urgency": ticket.urgency,
-        "sentiment": ticket.sentiment,
-        "confidence": ticket.confidence,
-        "routing_score": None,
-        "retrieved_context": ticket.retrieved_context,
-        "decision": None,
-        "draft_response": None,
-        "error": None,
-        "created_at": ticket.created_at.isoformat() if ticket.created_at else "",
-        "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else "",
-    }
-
-
-def _graph_config(ticket: Ticket) -> dict:
-    return {"configurable": {"thread_id": str(ticket.id)}}
-
-
-def _state_after_run(graph, config: dict, fallback: dict) -> dict:
-    """Return the persisted graph state, falling back to the invoke result."""
-    snapshot = graph.get_state(config)
-    if snapshot is not None and snapshot.values:
-        return dict(snapshot.values)
-    return dict(fallback)
-
-
 def require_draft_review(ticket: Ticket) -> None:
     """Ensure the ticket is actually paused awaiting a draft-review decision."""
     if ticket.status != TicketStatus.DRAFT_FOR_REVIEW:
@@ -128,30 +73,6 @@ def require_draft_review(ticket: Ticket) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail="Ticket is not awaiting draft review",
         )
-
-
-def run_ticket_graph(ticket: Ticket) -> dict:
-    """Run the graph for a new ticket.
-
-    Returns the state at completion, or at the human-in-the-loop interrupt when
-    the ticket is routed to draft_for_review (where the run stays paused until
-    resumed via resume_ticket_graph).
-    """
-    graph = get_compiled_graph()
-    config = _graph_config(ticket)
-    result = graph.invoke(_initial_state(ticket), config=config)
-    return _state_after_run(graph, config, result)
-
-
-def resume_ticket_graph(ticket: Ticket, action: str, edited_draft: str | None = None) -> dict:
-    """Resume a paused draft_for_review run with the agent's decision."""
-    graph = get_compiled_graph()
-    config = _graph_config(ticket)
-    review: dict = {"action": action}
-    if edited_draft is not None:
-        review["edited_response"] = edited_draft
-    result = graph.invoke(Command(resume=review), config=config)
-    return _state_after_run(graph, config, result)
 
 
 def execute_action(ticket: Ticket, action: str, amount: float | None = None) -> dict:
@@ -241,24 +162,14 @@ async def create_ticket(
     )
     db.add(message)
 
+    # Classification and drafting call the LLM, so the work is queued rather than
+    # awaited here: this request returns as soon as the ticket exists, and the
+    # worker records the outcome. Ticket and job share one transaction, so a
+    # ticket can never exist without the job that will process it.
+    await enqueue_ticket_job(db, ticket.id)
+
     await db.commit()
     await db.refresh(ticket)
-
-    # Trigger graph run in a thread pool — run_ticket_graph is synchronous and
-    # performs blocking LLM calls. Running it directly in this async route would
-    # block the FastAPI event loop for the full LLM round-trip (3–10s).
-    try:
-        result = await asyncio.to_thread(run_ticket_graph, ticket)
-        logger.debug("graph run complete for ticket %s", ticket.id)
-        # Update ticket with graph results
-        apply_graph_result(ticket, result)
-        await db.commit()
-        await db.refresh(ticket)
-    except Exception:
-        # The ticket is still returned in its pre-graph state; the failure is
-        # logged with a traceback instead of being swallowed or printed.
-        logger.exception("graph run failed for ticket %s", ticket.id)
-
     return ticket
 
 
@@ -551,9 +462,10 @@ async def process_email(
                 agent_id=(message_in.meta or {}).get("agent_id"),
             )
 
-        # Re-run the graph on the updated thread so the reply is classified and routed.
-        result = await asyncio.to_thread(run_ticket_graph, ticket)
-        apply_graph_result(ticket, result)
+        # Re-run the graph on the updated thread so the reply is classified and
+        # routed. Queued for the same reason as a new ticket: the LLM round trip
+        # must not hold the request open.
+        await enqueue_ticket_job(db, ticket.id, kind="reprocess")
 
     log_audit_action(
         ticket.id,

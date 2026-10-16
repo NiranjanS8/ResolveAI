@@ -18,8 +18,8 @@ from uuid import uuid4
 
 from sqlalchemy import delete, select
 
-from app.api.tickets import apply_graph_result, run_ticket_graph
 from app.db.session import SyncSessionLocal
+from app.graphs.runner import apply_graph_result, run_ticket_graph
 from app.models.base import Ticket, TicketMessage, TicketStatus
 
 # Customer ids used by manual/e2e testing. Anything created by them is noise in

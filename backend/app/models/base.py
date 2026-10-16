@@ -36,6 +36,17 @@ class TicketStatus(str, enum.Enum):
         return [e.value for e in TicketStatus]
 
 
+class JobStatus(str, enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+    @staticmethod
+    def values(_cls) -> list[str]:
+        return [e.value for e in JobStatus]
+
+
 class Intent(str, enum.Enum):
     GENERAL = "general"
     BILLING = "billing"
@@ -144,6 +155,42 @@ class AgentFeedback(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     ticket = relationship("Ticket", back_populates="feedback")
+
+
+class TicketJob(Base):
+    """A queued graph run for a ticket.
+
+    Processing a ticket is an LLM round trip, so it cannot happen inside the
+    request that creates the ticket. Jobs live in Postgres rather than in memory
+    so they survive a restart, and are claimed with ``FOR UPDATE SKIP LOCKED`` so
+    any number of workers can drain the same table without coordinating.
+    """
+    __tablename__ = "ticket_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    ticket_id = Column(UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(50), nullable=False, default="process")
+    status = Column(
+        Enum(JobStatus, name="job_status", values_callable=JobStatus.values, native_enum=False),
+        default=JobStatus.PENDING,
+        nullable=False,
+    )
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    # When the job may next be claimed: now for a fresh job, pushed out to back
+    # off a retry.
+    available_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
+    claimed_by = Column(String(100), nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_ticket_jobs_claimable", "status", "available_at"),
+    )
 
 
 class ProviderCall(Base):

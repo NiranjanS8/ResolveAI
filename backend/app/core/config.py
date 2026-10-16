@@ -15,9 +15,15 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "postgresql+psycopg://resolveai:resolveai@localhost:5433/resolveai"
-    
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # Ticket-processing queue. The worker drains the ticket_jobs table in-process;
+    # disable it to run the API without processing anything (e.g. to drain the
+    # queue from a separate worker instead).
+    WORKER_ENABLED: bool = True
+    WORKER_POLL_SECONDS: float = 1.0
+    JOB_MAX_ATTEMPTS: int = 3
+    # A job claimed by a worker that then dies is reclaimed after this long.
+    JOB_LEASE_SECONDS: int = 300
 
     # SQL statement logging (very noisy; enable only when debugging)
     SQL_ECHO: bool = False

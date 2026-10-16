@@ -249,7 +249,7 @@ export const HomePage: React.FC = () => {
       setTickets((prev) => [created, ...prev]);
       handleSelectTicket(created);
       setIsModalOpen(false);
-      addToast('success', `Ticket #${created.id.slice(0, 8)} ingested. Classified as "${created.intent}".`);
+      addToast('success', `Ticket #${created.id.slice(0, 8)} ingested. Queued for classification.`);
     } catch (error) {
       addToast('error', `Failed to ingest ticket: ${errorMessage(error)}`);
     }

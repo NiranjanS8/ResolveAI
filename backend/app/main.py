@@ -23,6 +23,7 @@ from app.api.health import router as health_router
 from app.api.tickets import router as tickets_router
 from app.api.analytics import router as analytics_router
 from app.core.config import settings
+from app.core.queue import start_worker, stop_worker
 from app.db.session import sync_engine, Base
 
 
@@ -30,7 +31,12 @@ from app.db.session import sync_engine, Base
 async def lifespan(app: FastAPI):
     # Startup - use sync engine to avoid psycopg v3 async issues on Windows
     Base.metadata.create_all(bind=sync_engine)
-    yield
+    # Drains the ticket_jobs table, so ticket creation no longer waits on the LLM.
+    start_worker()
+    try:
+        yield
+    finally:
+        stop_worker()
 
 
 app = FastAPI(

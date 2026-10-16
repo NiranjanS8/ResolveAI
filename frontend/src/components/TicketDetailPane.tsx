@@ -110,6 +110,11 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
   // they were empty on purpose.
   const detailReady = !isLoading && !detailError;
 
+  // The worker classifies a ticket after the request that created it has already
+  // returned, so a fresh ticket genuinely has no trace, sources or draft yet.
+  // "Not processed yet" and "processed and matched nothing" must not look alike.
+  const isQueued = ticket.status === 'new';
+
   const TABS: Array<{ id: DetailTab; label: string; count?: number }> = [
     { id: 'decision', label: 'Decision trace' },
     { id: 'conversation', label: 'Conversation', count: detailReady ? messages.length : undefined },
@@ -293,7 +298,22 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
           </div>
         )}
 
-        {detailReady && activeTab === 'decision' && (
+        {detailReady && activeTab === 'decision' && isQueued && (
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+            <span style={{ color: 'var(--text-secondary)' }}>
+              <Icon name="clock" size={20} />
+            </span>
+            <p className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
+              Waiting to be processed
+            </p>
+            <p className="text-[12px] max-w-xs" style={{ color: 'var(--text-secondary)' }}>
+              This ticket is queued for classification. The decision trace, retrieved sources
+              and any draft reply appear here once the worker has run it.
+            </p>
+          </div>
+        )}
+
+        {detailReady && !isQueued && activeTab === 'decision' && (
           <>
             <section>
               <h3 className="text-[13px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>

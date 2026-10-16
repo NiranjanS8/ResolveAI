@@ -30,25 +30,18 @@ def _check_database() -> dict:
         return {"ok": False, "detail": str(exc)}
 
 
-def _check_redis() -> dict:
-    """Probe Redis when a client is available.
+def _check_queue() -> dict:
+    """Queue depth for ticket processing.
 
-    Redis is configured but not yet used by the application, and its client is
-    not a hard dependency, so a missing client or an unreachable server is
-    reported without degrading the service.
+    Informational rather than fatal: the service still reads and enqueues while
+    the worker catches up, so a backlog must not make the service look down.
     """
-    try:
-        from redis import Redis
-    except ModuleNotFoundError:
-        return {"ok": False, "detail": "redis client not installed"}
+    from app.core.queue import queue_stats
 
     try:
-        client = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
-        client.ping()
-        client.close()
-        return {"ok": True, "detail": None}
+        return queue_stats()
     except Exception as exc:
-        logger.warning("health: redis unreachable: %s", exc)
+        logger.error("health: ticket queue unreadable: %s", exc)
         return {"ok": False, "detail": str(exc)}
 
 
@@ -64,7 +57,7 @@ async def health_check(response: Response):
         "status": "ok" if database["ok"] else "degraded",
         "service": settings.PROJECT_NAME,
         "database": database,
-        "redis": _check_redis(),
+        "queue": _check_queue(),
         "providers": providers,
         "provider_configured": any(providers.values()),
     }
