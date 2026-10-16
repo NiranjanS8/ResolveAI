@@ -11,6 +11,7 @@ from app.api.deps import get_db
 from app.core.audit import log_audit_action
 from app.core.outbound import INBOUND_ROLES, send_customer_message
 from app.core.queue import enqueue_ticket_job
+from app.core.prompt_safety import strip_hidden_content
 from app.graphs.runner import apply_graph_result, resume_ticket_graph
 from app.graphs.ticket_graph import DRAFT_PROMPT_VERSION
 from app.models.base import Ticket, TicketMessage, TicketStatus, AgentFeedback
@@ -64,6 +65,20 @@ def enforce_rate_limit(customer_id: str) -> None:
             detail="Rate limit exceeded. Please try again in a minute.",
         )
     window.append(now)
+
+
+def _inbound_meta(content: str, provided: dict | None) -> dict | None:
+    """Inbound message metadata, noting when content was hidden inside it.
+
+    The raw text is stored exactly as it arrived, because it is evidence. The note
+    exists so a reviewer reading the transcript knows part of the message was not
+    written to be read by them, instead of taking an invisible instruction for an
+    innocent one.
+    """
+    removed = strip_hidden_content(content).removed
+    if not removed:
+        return provided
+    return {**(provided or {}), "hidden_content_removed": removed}
 
 
 def require_draft_review(ticket: Ticket) -> None:
@@ -159,6 +174,7 @@ async def create_ticket(
         ticket_id=ticket.id,
         role="customer",
         content=ticket_in.body,
+        meta=_inbound_meta(ticket_in.body, None),
     )
     db.add(message)
 
@@ -223,7 +239,7 @@ async def add_message(
             ticket_id=ticket.id,
             role=message_in.role,
             content=message_in.content,
-            meta=message_in.meta,
+            meta=_inbound_meta(message_in.content, message_in.meta),
         )
         db.add(message)
         await db.commit()
@@ -450,7 +466,7 @@ async def process_email(
                 ticket_id=ticket.id,
                 role=message_in.role,
                 content=message_in.content,
-                meta=message_in.meta,
+                meta=_inbound_meta(message_in.content, message_in.meta),
             ))
             await db.commit()
         else:

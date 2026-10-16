@@ -388,6 +388,8 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
             {messages.length > 0 ? (
               messages.map((message) => {
                 const isCustomer = message.role === 'customer';
+                const hiddenContent = message.meta?.hidden_content_removed;
+                const removedHiddenContent = Array.isArray(hiddenContent) ? hiddenContent.join(', ') : '';
                 return (
                   <article
                     key={message.id}
@@ -406,6 +408,11 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
                         {formatClockTime(message.created_at)}
                       </span>
                     </div>
+                    {removedHiddenContent && (
+                      <p className="text-[12px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                        Content hidden from view was removed before the AI read this message: {removedHiddenContent}.
+                      </p>
+                    )}
                     <p className="text-[13px] whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-primary)' }}>
                       {message.content}
                     </p>
