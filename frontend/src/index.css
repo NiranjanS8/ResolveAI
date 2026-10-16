@@ -1,93 +1,90 @@
 @import "tailwindcss";
 
+/* ─── Design tokens ────────────────────────────────────────────────────────
+   Single source of truth is "ResolveAI — Frontend Design System".
+   Tailwind's default colour palette is cleared (`--color-*: initial`) so the
+   only colours that can exist in the app are the tokens below. A hex value or
+   colour name anywhere outside this file is a bug. No gradients, no shadows. */
 @theme {
   --font-sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
-  --color-bg-base: #0F1117;
-  --color-bg-surface: #161B22;
-  --color-bg-elevated: #1C2128;
-  --color-bg-hover: #21262D;
-  --color-border: #30363D;
-  --color-border-subtle: #21262D;
-  --color-text-primary: #E6EDF3;
-  --color-text-secondary: #8B949E;
-  --color-text-muted: #6E7681;
-  --color-accent: #58A6FF;
-  --color-accent-dim: #1F3B5C;
-  --color-green: #3FB950;
-  --color-green-dim: #1A2F1D;
-  --color-yellow: #D29922;
-  --color-yellow-dim: #2D2008;
-  --color-red: #F85149;
-  --color-red-dim: #2D0F0E;
-  --color-purple: #BC8CFF;
+  --radius: 4px;
+
+  --color-*: initial;
+
+  --color-base: var(--bg-base);
+  --color-surface: var(--bg-surface);
+  --color-surface-hover: var(--bg-surface-hover);
+  --color-hairline: var(--border-hairline);
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-status-high: var(--status-high);
+  --color-status-medium: var(--status-medium);
+  --color-status-low: var(--status-low);
+  --color-status-high-bg: var(--status-high-bg);
+  --color-status-medium-bg: var(--status-medium-bg);
+  --color-status-low-bg: var(--status-low-bg);
 }
 
-@layer base {
-  :root {
-    --bg-base: #0F1117;
-    --bg-surface: #161B22;
-    --bg-elevated: #1C2128;
-    --bg-hover: #21262D;
-    --border: #30363D;
-    --border-subtle: #21262D;
-    --text-primary: #E6EDF3;
-    --text-secondary: #8B949E;
-    --text-muted: #6E7681;
-    --accent: #58A6FF;
-    --accent-dim: #1F3B5C;
-    --green: #3FB950;
-    --green-dim: #1A2F1D;
-    --yellow: #D29922;
-    --yellow-dim: #2D2008;
-    --red: #F85149;
-    --red-dim: #2D0F0E;
-    --purple: #BC8CFF;
+:root {
+  --bg-base: #F1F2F0;
+  --bg-surface: #FFFFFF;
+  --bg-surface-hover: #E8EAE6;
+  --border-hairline: #DDE1DE;
+  --text-primary: #1B1F23;
+  --text-secondary: #5B6470;
+  --accent: #3C5B6E;
+  --accent-hover: #2E4757;
+  --status-high: #5C7A5C;
+  --status-medium: #B08968;
+  --status-low: #9C5B4D;
+  --status-high-bg: #EAF0E9;
+  --status-medium-bg: #F5EDE6;
+  --status-low-bg: #F3E7E4;
+  --scrim: rgba(27, 31, 35, 0.45);
+  --on-accent: #FFFFFF;
+  --radius: 4px;
+}
 
-    /* legacy aliases kept for backward compat */
-    --bg-surface-hover: #21262D;
-    --border-hairline: #30363D;
-    --accent-hover: #79BDFF;
-    --status-high: #3FB950;
-    --status-medium: #D29922;
-    --status-low: #F85149;
-    --status-high-bg: #1A2F1D;
-    --status-medium-bg: #2D2008;
-    --status-low-bg: #2D0F0E;
-    --radius: 6px;
-  }
+:root[data-theme="dark"] {
+  --bg-base: #14171A;
+  --bg-surface: #1B1F23;
+  --bg-surface-hover: #242830;
+  --border-hairline: #2C3138;
+  --text-primary: #EDEFEC;
+  --text-secondary: #8B93A0;
+  --accent: #6E93A8;
+  --accent-hover: #8AAABD;
+  --status-high: #7A9A7A;
+  --status-medium: #C9A17E;
+  --status-low: #BC7C6C;
+  --status-high-bg: #1E241D;
+  --status-medium-bg: #241F1B;
+  --status-low-bg: #241B19;
+  --scrim: rgba(0, 0, 0, 0.55);
+  --on-accent: #14171A;
+}
 
-  :root[data-theme="light"] {
-    --bg-base: #F6F8FA;
-    --bg-surface: #FFFFFF;
-    --bg-elevated: #F6F8FA;
-    --bg-hover: #EFF2F5;
-    --border: #D0D7DE;
-    --border-subtle: #E7EBF0;
-    --text-primary: #1F2328;
-    --text-secondary: #636C76;
-    --text-muted: #9198A1;
-    --accent: #0969DA;
-    --accent-dim: #DDF4FF;
-    --green: #1A7F37;
-    --green-dim: #DAFBE1;
-    --yellow: #9A6700;
-    --yellow-dim: #FFF8C5;
-    --red: #CF222E;
-    --red-dim: #FFEBE9;
-    --purple: #8250DF;
-
-    /* legacy aliases */
-    --bg-surface-hover: #EFF2F5;
-    --border-hairline: #D0D7DE;
-    --accent-hover: #0860CA;
-    --status-high: #1A7F37;
-    --status-medium: #9A6700;
-    --status-low: #CF222E;
-    --status-high-bg: #DAFBE1;
-    --status-medium-bg: #FFF8C5;
-    --status-low-bg: #FFEBE9;
-    --radius: 6px;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-base: #14171A;
+    --bg-surface: #1B1F23;
+    --bg-surface-hover: #242830;
+    --border-hairline: #2C3138;
+    --text-primary: #EDEFEC;
+    --text-secondary: #8B93A0;
+    --accent: #6E93A8;
+    --accent-hover: #8AAABD;
+    --status-high: #7A9A7A;
+    --status-medium: #C9A17E;
+    --status-low: #BC7C6C;
+    --status-high-bg: #1E241D;
+    --status-medium-bg: #241F1B;
+    --status-low-bg: #241B19;
+    --scrim: rgba(0, 0, 0, 0.55);
+    --on-accent: #14171A;
   }
 }
 
@@ -105,6 +102,7 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Mono is reserved for data: ids, timestamps, scores, payloads. */
   code, pre, kbd, samp {
     font-family: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
     font-size: 0.875em;
@@ -112,25 +110,18 @@
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 10px;
-  }
-  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  ::-webkit-scrollbar-thumb { background: var(--border-hairline); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 
-  input, textarea, select, button {
-    font-family: inherit;
-  }
+  input, textarea, select, button { font-family: inherit; }
 
-  /* Keyboard focus stays perceivable on the dark palette; components that set
-     their own focus border still inherit this outline as a second cue. */
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--text-primary);
     outline-offset: 2px;
   }
 }
 
-/* ─── Animations ─────────────────────────────────────────── */
+/* ─── Animations ─────────────────────────────────────────────────────────── */
 @keyframes fadeSlideIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -139,11 +130,6 @@
 @keyframes fadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
-}
-
-@keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
 }
 
 @keyframes pulseDot {
@@ -155,16 +141,38 @@
 .animate-slide-in  { animation: fadeSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .animate-pulse-dot { animation: pulseDot 2s ease infinite; }
 
-/* ─── Utility classes ────────────────────────────────────── */
 .font-mono { font-family: 'IBM Plex Mono', monospace; }
 
-/* ─── Queue / detail split layout ────────────────────────── */
+/* ─── Confidence bar (always coloured by the routing tier, never ad hoc) ─── */
+.conf-bar-track {
+  height: 4px;
+  background: var(--border-hairline);
+  overflow: hidden;
+}
+
+.conf-bar-fill {
+  height: 100%;
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ─── Single app gutter ───────────────────────────────────────────────────
+   Nav, stats strip, and panels share one container so their left edge aligns. */
+.app-gutter {
+  width: 100%;
+  max-width: 1600px;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+/* ─── Queue / detail split — one full-height two-pane surface ───────────── */
 .queue-layout {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: 340px 1fr;
-  height: calc(100vh - 120px);
+  grid-template-columns: 340px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
 }
+
+.queue-layout > * { min-height: 0; }
 
 @media (max-width: 900px) {
   .queue-layout {
@@ -172,28 +180,5 @@
     height: auto;
   }
 
-  .queue-layout > * {
-    min-height: min(70vh, 520px);
-  }
-}
-
-/* ─── Status badge colors ────────────────────────────────── */
-.badge-green  { background: var(--green-dim);  color: var(--green); }
-.badge-yellow { background: var(--yellow-dim); color: var(--yellow); }
-.badge-red    { background: var(--red-dim);    color: var(--red); }
-.badge-blue   { background: var(--accent-dim); color: var(--accent); }
-.badge-purple { background: rgba(188,140,255,.15); color: var(--purple); }
-
-/* ─── Confidence bar ─────────────────────────────────────── */
-.conf-bar-track {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
-  overflow: hidden;
-}
-
-.conf-bar-fill {
-  height: 100%;
-  border-radius: 2px;
-  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  .queue-layout > * { min-height: min(70vh, 520px); }
 }

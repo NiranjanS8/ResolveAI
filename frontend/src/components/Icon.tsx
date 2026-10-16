@@ -18,7 +18,15 @@ export type IconName =
   | 'sparkle'
   | 'check'
   | 'alert'
-  | 'star';
+  | 'star'
+  | 'mail'
+  | 'chat'
+  | 'copy'
+  | 'shield'
+  | 'route'
+  | 'database'
+  | 'clock'
+  | 'lock';
 
 interface IconProps {
   name: IconName;
@@ -64,6 +72,53 @@ const GLYPHS: Record<IconName, React.ReactNode> = {
   ),
   star: (
     <path d="m12 3 2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.77l-5.8 3.09 1.11-6.46-4.7-4.58 6.49-.94z" />
+  ),
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3 7 9 6 9-6" />
+    </>
+  ),
+  chat: (
+    <path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-4.5A8 8 0 0 1 3 12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z" />
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </>
+  ),
+  shield: (
+    <>
+      <path d="M12 3l8 3v6c0 5-3.4 8.4-8 9.5C7.4 20.4 4 17 4 12V6z" />
+      <path d="m9 12 2 2 4-4" />
+    </>
+  ),
+  route: (
+    <>
+      <circle cx="6" cy="19" r="2.5" />
+      <circle cx="18" cy="5" r="2.5" />
+      <path d="M8.5 19H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5" />
+    </>
+  ),
+  database: (
+    <>
+      <ellipse cx="12" cy="5.5" rx="8" ry="3" />
+      <path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13" />
+      <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3.5 2" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="4" y="10" width="16" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </>
   ),
 };
 

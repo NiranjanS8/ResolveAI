@@ -23,6 +23,20 @@ import { AnalyticsDashboardView } from '../components/AnalyticsDashboardView';
 import { ToastContainer, type ToastMessage } from '../components/Toast';
 import { Icon } from '../components/Icon';
 
+interface StatProps {
+  label: string;
+  value: string | number;
+}
+
+const Stat: React.FC<StatProps> = ({ label, value }) => (
+  <span className="flex items-baseline gap-1.5">
+    <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+    <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+      {value}
+    </span>
+  </span>
+);
+
 export const HomePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'queue' | 'analytics'>('queue');
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -37,18 +51,18 @@ export const HomePage: React.FC = () => {
     const id = `toast_${Date.now()}_${Math.random()}`;
     setToasts((prev) => [...prev, { id, type, message }]);
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
     }, 4500);
   };
 
   const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
   const loadTicketDetail = useCallback(async (ticket: Ticket) => {
     try {
       // The list endpoint omits messages/audit logs, so fetch the full record
-      // whenever we (re)select a ticket.
+      // whenever a ticket is selected.
       const detail = await getTicket(ticket.id);
       setSelectedTicket(detail);
     } catch {
@@ -62,12 +76,11 @@ export const HomePage: React.FC = () => {
       setIsBackendConnected(isOnline);
       const data = await listTickets();
       setTickets(data);
-      if (data.length > 0 && !selectedTicket) {
-        await loadTicketDetail(data[0]);
-      } else if (selectedTicket) {
-        const updated = data.find((t) => t.id === selectedTicket.id);
-        if (updated) await loadTicketDetail(updated);
-      }
+      // Fall back to the newest ticket when the selected one is gone (deleted, or
+      // filtered out between polls) so the detail pane never strands a stale id.
+      const target = data.find((t) => t.id === selectedTicket?.id) ?? data[0];
+      if (target) await loadTicketDetail(target);
+      else setSelectedTicket(null);
     } catch {
       setIsBackendConnected(false);
     } finally {
@@ -81,121 +94,110 @@ export const HomePage: React.FC = () => {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  // Handle Approve
   const handleApprove = async (ticket: Ticket) => {
     try {
       const updated = await approveDraft(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
-      addToast('success', `Ticket #${ticket.id} approved. AI draft dispatched to customer.`);
+      addToast('success', `Ticket #${ticket.id.slice(0, 8)} approved. AI draft dispatched to customer.`);
     } catch {
-      addToast('error', `Failed to approve ticket #${ticket.id}`);
+      addToast('error', `Failed to approve ticket #${ticket.id.slice(0, 8)}`);
     }
   };
 
-  // Handle Edit Draft
   const handleEdit = async (ticket: Ticket, editedDraft: string) => {
     try {
       const updated = await editDraft(ticket.id, editedDraft);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
-      addToast('success', `Edited response for #${ticket.id} sent successfully.`);
+      addToast('success', `Edited response for #${ticket.id.slice(0, 8)} sent successfully.`);
     } catch {
-      addToast('error', `Failed to edit and send draft for #${ticket.id}`);
+      addToast('error', `Failed to edit and send draft for #${ticket.id.slice(0, 8)}`);
     }
   };
 
-  // Handle Reject
   const handleReject = async (ticket: Ticket) => {
     try {
       const updated = await rejectDraft(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
-      addToast('warning', `Ticket #${ticket.id} draft rejected — routed to human escalation.`);
+      addToast('warning', `Ticket #${ticket.id.slice(0, 8)} draft rejected. Routed to a human.`);
     } catch {
-      addToast('error', `Failed to reject ticket #${ticket.id}`);
+      addToast('error', `Failed to reject ticket #${ticket.id.slice(0, 8)}`);
     }
   };
 
-  // Handle Refund Tool
   const handleRefund = async (ticket: Ticket, amount: number) => {
     try {
       const updated = await processRefundAction(ticket.id, amount);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
       if (amount > 2000) {
-        addToast('warning', `Refund of ₹${amount} exceeds ₹2,000 threshold. Supervisor approval required.`);
+        addToast('warning', `Refund of ₹${amount} exceeds the ₹2,000 cap. Supervisor approval required.`);
       } else {
-        addToast('success', `Refund of ₹${amount} successfully processed under ₹2,000 auto-cap.`);
+        addToast('success', `Refund of ₹${amount} processed under the ₹2,000 auto-cap.`);
       }
     } catch {
-      addToast('error', `Refund execution failed for #${ticket.id}`);
+      addToast('error', `Refund execution failed for #${ticket.id.slice(0, 8)}`);
     }
   };
 
-  // Handle Order Status Tool
   const handleOrderStatus = async (ticket: Ticket) => {
     try {
       const updated = await processOrderStatusAction(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
-      addToast('info', `Order status lookup executed for #${ticket.id}. Details added to conversation.`);
+      addToast('info', `Order status lookup executed for #${ticket.id.slice(0, 8)}.`);
     } catch {
-      addToast('error', `Order status lookup failed`);
+      addToast('error', 'Order status lookup failed');
     }
   };
 
-  // Handle Password Reset Tool
   const handlePasswordReset = async (ticket: Ticket) => {
     try {
       const updated = await processPasswordResetAction(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       await loadTicketDetail(updated);
-      addToast('success', `Allow-listed action: Secure password reset link dispatched to ${ticket.customer_id}`);
+      addToast('success', `Secure password reset link dispatched to ${ticket.customer_id}`);
     } catch {
-      addToast('error', `Password reset failed`);
+      addToast('error', 'Password reset failed');
     }
   };
 
-  // Handle Message Send
   const handleSendMessage = async (ticket: Ticket, text: string) => {
     try {
-      const newMsg = await addMessage(ticket.id, text, 'agent');
-      const updated: Ticket = {
-        ...ticket,
-        messages: [...(ticket.messages || []), newMsg],
-      };
+      const newMessage = await addMessage(ticket.id, text, 'agent');
+      const updated: Ticket = { ...ticket, messages: [...(ticket.messages || []), newMessage] };
       setTickets((prev) => prev.map((t) => (t.id === ticket.id ? updated : t)));
       await loadTicketDetail(updated);
-      addToast('info', `Message posted to conversation.`);
+      addToast('info', 'Message posted to the conversation.');
     } catch {
-      addToast('error', `Failed to send reply`);
+      addToast('error', 'Failed to send reply');
     }
   };
 
-  // Handle Ticket Ingestion
   const handleCreateTicket = async (formData: TicketCreate) => {
     try {
       const created = await createTicket(formData);
       setTickets((prev) => [created, ...prev]);
       await loadTicketDetail(created);
       setIsModalOpen(false);
-      addToast('success', `Ticket #${created.id} ingested. LangGraph classified intent: "${created.intent}".`);
+      addToast('success', `Ticket #${created.id.slice(0, 8)} ingested. Classified as "${created.intent}".`);
     } catch {
       addToast('error', 'Failed to ingest ticket');
     }
   };
 
-  // Quick Stats
   const pendingReviewCount = tickets.filter((t) => t.status === 'draft_for_review').length;
   const autoResolvedCount = tickets.filter((t) => t.status === 'auto_resolved').length;
   const escalatedCount = tickets.filter((t) => t.status === 'escalated').length;
-  const deflectionRate = tickets.length > 0 ? Math.round(((autoResolvedCount + tickets.filter(t => t.status === 'resolved').length) / tickets.length) * 100) : 74;
+  const handledCount = tickets.filter((t) => t.status === 'auto_resolved' || t.status === 'resolved').length;
+  const deflectionRate = tickets.length > 0 ? `${Math.round((handledCount / tickets.length) * 100)}%` : '—';
 
   return (
     <div
-      className="flex flex-col"
-      style={{ minHeight: '100vh', backgroundColor: 'var(--bg-base)', color: 'var(--text-primary)' }}
+      className="flex flex-col h-screen overflow-hidden"
+      style={{ backgroundColor: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
       <Navbar
         activeTab={activeTab}
@@ -203,102 +205,68 @@ export const HomePage: React.FC = () => {
         onOpenNewTicket={() => setIsModalOpen(true)}
         isBackendConnected={isBackendConnected}
         onRefresh={loadData}
-        ticketCount={tickets.length}
-        pendingReviewCount={pendingReviewCount}
       />
 
-      {/* Stats sub-bar — compact, single line */}
-      <div
-        className="px-5 py-1.5 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs font-mono"
-        style={{ backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border)' }}
-      >
-        <span style={{ color: 'var(--text-muted)' }}>
-          Queue <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{tickets.length}</span>
-        </span>
-        <span style={{ color: 'var(--text-muted)' }}>
-          Review <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>{pendingReviewCount}</span>
-        </span>
-        <span style={{ color: 'var(--text-muted)' }}>
-          Auto-resolved <span style={{ color: 'var(--green)', fontWeight: 600 }}>{autoResolvedCount}</span>
-        </span>
-        <span style={{ color: 'var(--text-muted)' }}>
-          Escalated <span style={{ color: 'var(--red)', fontWeight: 600 }}>{escalatedCount}</span>
-        </span>
-        <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>
-          Deflection <span style={{ color: 'var(--green)', fontWeight: 600 }}>{deflectionRate}%</span>
-        </span>
+      <div style={{ backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border-hairline)' }}>
+        <div className="app-gutter flex flex-wrap items-center gap-x-6 gap-y-1 py-2 text-[12px]">
+          <Stat label="Queue" value={tickets.length} />
+          <Stat label="Needs review" value={pendingReviewCount} />
+          <Stat label="Auto-resolved" value={autoResolvedCount} />
+          <Stat label="Escalated" value={escalatedCount} />
+          <span className="ml-auto">
+            <Stat label="Deflection" value={deflectionRate} />
+          </span>
+        </div>
       </div>
 
-      {/* Main workspace */}
-      <main
-        className="flex-1 w-full mx-auto px-5 py-4"
-        style={{ maxWidth: '1600px' }}
-      >
+      <main className="app-gutter flex-1 min-h-0 py-4">
         {loading && tickets.length === 0 ? (
-          <div className="h-[70vh] flex items-center justify-center">
+          <div className="h-full flex items-center justify-center">
             <div className="flex flex-col items-center gap-3">
               <div
-                className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
-                style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }}
+                className="w-7 h-7 rounded-full border-2 animate-spin"
+                style={{ borderColor: 'var(--border-hairline)', borderTopColor: 'var(--text-primary)' }}
               />
-              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                Connecting to broker…
+              <span className="text-[13px]" style={{ color: 'var(--text-secondary)' }}>
+                Loading queue
               </span>
             </div>
           </div>
         ) : activeTab === 'queue' ? (
-          <div
-            className="queue-layout"
-          >
-            {/* Left: Queue pane */}
-            <div className="overflow-hidden flex flex-col">
-              <TicketList
-                tickets={tickets}
-                selectedTicketId={selectedTicket?.id}
-                onSelectTicket={loadTicketDetail}
-                filterChannel={filterChannel}
-                onFilterChannelChange={setFilterChannel}
-              />
-            </div>
+          <div className="queue-layout">
+            <TicketList
+              tickets={tickets}
+              selectedTicketId={selectedTicket?.id}
+              onSelectTicket={loadTicketDetail}
+              filterChannel={filterChannel}
+              onFilterChannelChange={setFilterChannel}
+            />
 
-            {/* Right: Detail pane */}
-            <div className="overflow-hidden flex flex-col">
-              {selectedTicket ? (
-                <TicketDetailPane
-                  ticket={selectedTicket}
-                  onApprove={handleApprove}
-                  onEdit={handleEdit}
-                  onReject={handleReject}
-                  onRefund={handleRefund}
-                  onOrderStatus={handleOrderStatus}
-                  onPasswordReset={handlePasswordReset}
-                  onSendMessage={handleSendMessage}
-                  onClose={() => setSelectedTicket(null)}
-                />
-              ) : (
-                <div
-                  className="flex-1 flex flex-col items-center justify-center rounded-lg text-center"
-                  style={{
-                    border: '1px dashed var(--border)',
-                    backgroundColor: 'var(--bg-surface)',
-                    color: 'var(--text-muted)',
-                  }}
-                >
-                  <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
-                    style={{ backgroundColor: 'var(--bg-elevated)', color: 'var(--text-muted)' }}
-                  >
-                    <Icon name="inbox" size={22} />
-                  </div>
-                  <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>
-                    No ticket selected
-                  </p>
-                  <p className="text-xs max-w-xs">
-                    Select a ticket from the queue to view AI analysis, conversation history, and draft responses.
-                  </p>
-                </div>
-              )}
-            </div>
+            {selectedTicket ? (
+              <TicketDetailPane
+                ticket={selectedTicket}
+                onApprove={handleApprove}
+                onEdit={handleEdit}
+                onReject={handleReject}
+                onRefund={handleRefund}
+                onOrderStatus={handleOrderStatus}
+                onPasswordReset={handlePasswordReset}
+                onSendMessage={handleSendMessage}
+                onClose={() => setSelectedTicket(null)}
+              />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-center px-6">
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  <Icon name="inbox" size={22} />
+                </span>
+                <p className="text-[13px] font-medium mt-3" style={{ color: 'var(--text-primary)' }}>
+                  No ticket selected
+                </p>
+                <p className="text-[12px] mt-1 max-w-xs" style={{ color: 'var(--text-secondary)' }}>
+                  Pick a ticket to see its decision trace, retrieved sources, and draft reply.
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <AnalyticsDashboardView />

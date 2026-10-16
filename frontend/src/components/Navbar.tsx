@@ -7,9 +7,12 @@ interface NavbarProps {
   onOpenNewTicket: () => void;
   isBackendConnected: boolean;
   onRefresh: () => void;
-  ticketCount: number;
-  pendingReviewCount: number;
 }
+
+const TABS: Array<{ id: 'queue' | 'analytics'; label: string }> = [
+  { id: 'queue', label: 'Agent queue' },
+  { id: 'analytics', label: 'Analytics' },
+];
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
@@ -17,11 +20,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenNewTicket,
   isBackendConnected,
   onRefresh,
-  ticketCount,
-  pendingReviewCount,
 }) => {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window === 'undefined') return 'dark';
+    if (typeof window === 'undefined') return 'light';
     const saved = localStorage.getItem('resolveai-theme') as 'light' | 'dark' | null;
     return saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   });
@@ -39,117 +40,80 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header
-      className="sticky top-0 z-40 border-b"
-      style={{
-        backgroundColor: 'var(--bg-surface)',
-        borderColor: 'var(--border)',
-      }}
+      className="sticky top-0 z-40"
+      style={{ backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border-hairline)' }}
     >
-      <div
-        className="max-w-screen-2xl mx-auto px-5 flex items-center gap-6"
-        style={{ height: '52px' }}
-      >
-        {/* Brand */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          <div
-            className="w-7 h-7 rounded-md flex items-center justify-center text-white font-bold text-sm"
-            style={{
-              background: 'linear-gradient(135deg, var(--accent) 0%, var(--purple) 100%)',
-            }}
-          >
-            R
-          </div>
-          <span className="font-semibold text-sm tracking-tight" style={{ color: 'var(--text-primary)' }}>
-            ResolveAI
-          </span>
-        </div>
+      <div className="app-gutter flex items-center gap-8" style={{ height: 52 }}>
+        {/* Plain wordmark — no tile, no gradient */}
+        <span className="text-[15px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
+          ResolveAI
+        </span>
 
-        {/* Nav Tabs */}
-        <nav className="flex items-center gap-1 flex-1">
-          <button
-            id="nav-tab-queue"
-            onClick={() => onTabChange('queue')}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all"
-            style={{
-              backgroundColor: activeTab === 'queue' ? 'var(--bg-hover)' : 'transparent',
-              color: activeTab === 'queue' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            }}
-          >
-            <span>Agent Queue</span>
-            <span
-              className="font-mono text-xs px-1.5 py-0.5 rounded-full"
-              style={{
-                backgroundColor: pendingReviewCount > 0 ? 'var(--yellow-dim)' : 'var(--bg-elevated)',
-                color: pendingReviewCount > 0 ? 'var(--yellow)' : 'var(--text-muted)',
-              }}
-            >
-              {ticketCount}
-            </span>
-          </button>
-
-          <button
-            id="nav-tab-analytics"
-            onClick={() => onTabChange('analytics')}
-            className="px-3 py-1.5 rounded-md text-sm font-medium transition-all"
-            style={{
-              backgroundColor: activeTab === 'analytics' ? 'var(--bg-hover)' : 'transparent',
-              color: activeTab === 'analytics' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            }}
-          >
-            Analytics & ROI
-          </button>
+        {/* Tabs: active state is the text colour plus a 2px underline, never accent */}
+        <nav className="flex items-stretch gap-6 self-stretch flex-1">
+          {TABS.map((tab) => {
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                id={`nav-tab-${tab.id}`}
+                onClick={() => onTabChange(tab.id)}
+                aria-current={active ? 'page' : undefined}
+                className="flex items-center text-[13px] font-medium"
+                style={{
+                  color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  borderBottom: `2px solid ${active ? 'var(--text-primary)' : 'transparent'}`,
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Right controls */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Backend status pill */}
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Connectivity — the single live/offline indicator in the app */}
           <button
             onClick={onRefresh}
-            title={isBackendConnected ? 'Live backend' : 'Demo mode — click to retry'}
-            aria-label={isBackendConnected ? 'Backend live — refresh' : 'Demo mode — click to retry'}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors"
-            style={{
-              backgroundColor: 'var(--bg-elevated)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
+            title={isBackendConnected ? 'Backend live — refresh' : 'Offline — click to retry'}
+            aria-label={isBackendConnected ? 'Backend live, refresh' : 'Backend offline, retry'}
+            className="flex items-center gap-2 text-xs"
+            style={{ color: 'var(--text-secondary)' }}
           >
             <span
-              className="w-1.5 h-1.5 rounded-full"
-              style={{
-                backgroundColor: isBackendConnected ? 'var(--green)' : 'var(--yellow)',
-                ...(isBackendConnected && { animation: 'pulseDot 2s ease infinite' }),
-              }}
+              className={isBackendConnected ? 'w-1.5 h-1.5 rounded-full animate-pulse-dot' : 'w-1.5 h-1.5 rounded-full'}
+              style={{ backgroundColor: isBackendConnected ? 'var(--text-primary)' : 'var(--text-secondary)' }}
             />
-            <span className="font-mono">{isBackendConnected ? 'Live' : 'Demo'}</span>
+            {isBackendConnected ? 'Live' : 'Offline'}
           </button>
 
-          {/* Theme toggle */}
           <button
             id="btn-toggle-theme"
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            className="w-8 h-8 rounded-md flex items-center justify-center transition-colors"
+            className="w-7 h-7 flex items-center justify-center"
             style={{
-              backgroundColor: 'var(--bg-elevated)',
               color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
+              border: '1px solid var(--border-hairline)',
+              borderRadius: 'var(--radius)',
             }}
           >
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={15} />
           </button>
 
-          {/* New Ticket */}
+          {/* Dev/test control: outline, never the screen's filled action */}
           <button
             id="btn-new-ticket"
             onClick={onOpenNewTicket}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-white transition-opacity hover:opacity-90"
+            className="flex items-center gap-1.5 px-3 h-7 text-[13px] font-medium"
             style={{
-              background: 'linear-gradient(135deg, var(--accent) 0%, #4A9AFF 100%)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-hairline)',
+              borderRadius: 'var(--radius)',
             }}
           >
             <Icon name="plus" size={14} />
-            <span>Ingest Ticket</span>
+            Ingest ticket
           </button>
         </div>
       </div>

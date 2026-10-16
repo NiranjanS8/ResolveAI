@@ -1,136 +1,123 @@
 import React, { useState } from 'react';
 import { type Ticket } from '../api/tickets';
 import { Icon } from './Icon';
+import { REFUND_INR_CAP, intentLabel } from '../lib/ticketDisplay';
 
 interface ActionButtonsProps {
   ticket: Ticket;
-  canApprove: boolean;
-  canEdit: boolean;
-  canReject: boolean;
-  onApprove: () => void;
-  onEdit: (editedDraft: string) => void;
-  onReject: () => void;
   onRefund?: (amount: number) => void;
   onOrderStatus?: () => void;
   onPasswordReset?: () => void;
 }
 
-/**
- * Secondary tool-action panel — shown below the DraftCard.
- * Primary HITL actions (Approve/Edit/Reject) live in DraftCard; this component
- * only exposes guardrailed tool calls: Refund, Order Status, Password Reset.
- */
+type ToolId = 'refund' | 'order_status' | 'password_reset';
+
+/* A tool is only offered where its intent makes it meaningful. Anything else is
+   shown disabled with the reason, rather than firing on an unrelated ticket. */
+const APPLICABLE_INTENTS: Record<ToolId, string[]> = {
+  refund: ['refund', 'billing', 'cancellation'],
+  order_status: ['order_status', 'refund', 'billing', 'cancellation', 'technical'],
+  password_reset: ['password_reset', 'account', 'technical'],
+};
+
+const TOOLS: Array<{ id: ToolId; label: string; reason: string }> = [
+  { id: 'refund', label: 'Issue refund', reason: 'Applies to refund, billing and cancellation tickets.' },
+  { id: 'order_status', label: 'Track order', reason: 'Applies to order, delivery and billing tickets.' },
+  { id: 'password_reset', label: 'Reset 2FA or password', reason: 'Applies to account and access tickets.' },
+];
+
+const isApplicable = (tool: ToolId, ticket: Ticket) => {
+  const intent = ticket.intent ?? 'general';
+  return APPLICABLE_INTENTS[tool].includes(intent);
+};
+
 export const ActionButtons: React.FC<ActionButtonsProps> = ({
+  ticket,
   onRefund,
   onOrderStatus,
   onPasswordReset,
 }) => {
   const [showRefundInput, setShowRefundInput] = useState(false);
-  const [refundAmount, setRefundAmount]       = useState('850');
+  const [refundAmount, setRefundAmount] = useState('850');
+
+  const handlers: Record<ToolId, (() => void) | undefined> = {
+    refund: onRefund ? () => setShowRefundInput((open) => !open) : undefined,
+    order_status: onOrderStatus,
+    password_reset: onPasswordReset,
+  };
 
   const handleRefundSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const val = parseFloat(refundAmount);
-    if (!isNaN(val) && val > 0 && onRefund) {
-      onRefund(val);
+    const amount = Number.parseFloat(refundAmount);
+    if (Number.isFinite(amount) && amount > 0 && onRefund) {
+      onRefund(amount);
       setShowRefundInput(false);
     }
   };
 
-  const exceedsCap     = parseFloat(refundAmount) > 2000;
-  const hasToolActions = onRefund || onOrderStatus || onPasswordReset;
-
-  if (!hasToolActions) return null;
+  const exceedsCap = Number.parseFloat(refundAmount) > REFUND_INR_CAP;
 
   return (
-    <div className="space-y-2.5">
-      {/* Tool actions header */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-          Tool Actions
+    <section aria-label="Tool actions" className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[12px] mr-1" style={{ color: 'var(--text-secondary)' }}>
+          Tools
         </span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ backgroundColor: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
-          guardrailed
-        </span>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {onRefund && (
-          <button
-            id="action-btn-refund-toggle"
-            onClick={() => setShowRefundInput(!showRefundInput)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md font-medium transition-colors"
-            style={{
-              backgroundColor: showRefundInput ? 'var(--yellow-dim)' : 'var(--bg-elevated)',
-              color: showRefundInput ? 'var(--yellow)' : 'var(--text-secondary)',
-              border: `1px solid ${showRefundInput ? 'rgba(210,153,34,.3)' : 'var(--border)'}`,
-            }}
-          >
-            ₹ Issue Refund
-          </button>
-        )}
-
-        {onOrderStatus && (
-          <button
-            id="action-btn-order-status"
-            onClick={onOrderStatus}
-            className="px-3 py-1.5 text-xs rounded-md font-medium transition-colors"
-            style={{
-              backgroundColor: 'var(--bg-elevated)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            Track Order
-          </button>
-        )}
-
-        {onPasswordReset && (
-          <button
-            id="action-btn-pwd-reset"
-            onClick={onPasswordReset}
-            className="px-3 py-1.5 text-xs rounded-md font-medium transition-colors"
-            style={{
-              backgroundColor: 'var(--bg-elevated)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            Reset 2FA / Pass
-          </button>
-        )}
-      </div>
-
-      {/* Refund guardrail drawer */}
-      {showRefundInput && (
-        <form
-          onSubmit={handleRefundSubmit}
-          className="p-3.5 rounded-lg space-y-2.5 animate-slide-in"
-          style={{
-            backgroundColor: 'var(--bg-elevated)',
-            border: `1px solid ${exceedsCap ? 'rgba(248,81,73,.3)' : 'var(--border)'}`,
-          }}
-        >
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
-              Guardrailed Refund (INR)
-            </span>
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium font-mono"
+        {TOOLS.map((tool) => {
+          const applicable = isApplicable(tool.id, ticket);
+          const handler = handlers[tool.id];
+          const available = applicable && Boolean(handler);
+          return (
+            <button
+              key={tool.id}
+              id={`action-btn-${tool.id}`}
+              disabled={!available}
+              title={available ? tool.label : `Not applicable — ${tool.reason}`}
+              onClick={handler}
+              className="px-3 py-1.5 text-[13px] font-medium whitespace-nowrap"
               style={{
-                backgroundColor: exceedsCap ? 'var(--red-dim)'    : 'var(--green-dim)',
-                color:           exceedsCap ? 'var(--red)'        : 'var(--green)',
+                border: '1px solid var(--border-hairline)',
+                borderRadius: 'var(--radius)',
+                backgroundColor: 'transparent',
+                color: available ? 'var(--text-primary)' : 'var(--text-secondary)',
+                opacity: available ? 1 : 0.6,
+                cursor: available ? 'pointer' : 'not-allowed',
               }}
             >
-              <Icon name={exceedsCap ? 'alert' : 'check'} size={12} />
-              {exceedsCap ? 'Exceeds ₹2,000 cap — requires supervisor' : 'Within ₹2,000 auto-cap'}
+              {tool.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {!TOOLS.some((tool) => isApplicable(tool.id, ticket)) && (
+        <p className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+          No tool applies to a {intentLabel(ticket.intent)?.toLowerCase() ?? 'general'} ticket — it needs a human.
+        </p>
+      )}
+
+      {showRefundInput && isApplicable('refund', ticket) && (
+        <form
+          onSubmit={handleRefundSubmit}
+          className="p-3.5 space-y-2.5 animate-slide-in"
+          style={{ border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius)' }}
+        >
+          <div className="flex items-center justify-between gap-2 text-[12px]">
+            <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
+              Refund (INR)
+            </span>
+            <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+              <Icon name={exceedsCap ? 'alert' : 'shield'} size={12} />
+              {exceedsCap
+                ? `Over the ₹${REFUND_INR_CAP.toLocaleString('en-IN')} cap — routes to human review`
+                : `Within the ₹${REFUND_INR_CAP.toLocaleString('en-IN')} auto-cap`}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <span
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-sm"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] font-mono"
                 style={{ color: 'var(--text-secondary)' }}
               >
                 ₹
@@ -140,10 +127,11 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
                 type="number"
                 value={refundAmount}
                 onChange={(e) => setRefundAmount(e.target.value)}
-                className="w-full pl-6 pr-3 py-2 text-sm rounded-md"
+                className="w-full pl-6 pr-3 py-1.5 text-[13px] font-mono"
                 style={{
                   backgroundColor: 'var(--bg-surface)',
-                  border: `1px solid ${exceedsCap ? 'var(--red)' : 'var(--border)'}`,
+                  border: '1px solid var(--border-hairline)',
+                  borderRadius: 'var(--radius)',
                   color: 'var(--text-primary)',
                 }}
                 placeholder="Amount in INR"
@@ -153,14 +141,19 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
             <button
               id="btn-process-refund"
               type="submit"
-              className="px-4 py-2 text-sm font-medium rounded-md text-white"
-              style={{ backgroundColor: exceedsCap ? 'var(--yellow)' : 'var(--accent)' }}
+              className="px-3.5 py-1.5 text-[13px] font-medium"
+              style={{
+                border: '1px solid var(--border-hairline)',
+                borderRadius: 'var(--radius)',
+                color: 'var(--text-primary)',
+                backgroundColor: 'transparent',
+              }}
             >
               Execute
             </button>
           </div>
         </form>
       )}
-    </div>
+    </section>
   );
 };

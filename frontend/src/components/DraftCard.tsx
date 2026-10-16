@@ -3,18 +3,18 @@ import { Icon } from './Icon';
 
 interface DraftCardProps {
   draftResponse: string | null | undefined;
-  intent: string | null | undefined;
-  confidence?: number | null;
   onApprove?: () => void;
   onEdit?: (edited: string) => void;
   onReject?: () => void;
   canInteract?: boolean;
 }
 
+/**
+ * The AI-generated reply. A thin accent left border plus a monospace "AI draft"
+ * label is the only thing marking it as machine-written — no badge, no fill.
+ */
 export const DraftCard: React.FC<DraftCardProps> = ({
   draftResponse,
-  intent,
-  confidence,
   onApprove,
   onEdit,
   onReject,
@@ -37,132 +37,118 @@ export const DraftCard: React.FC<DraftCardProps> = ({
     setIsEditing(false);
   };
 
+  const secondaryButton: React.CSSProperties = {
+    border: '1px solid var(--border-hairline)',
+    borderRadius: 'var(--radius)',
+    color: 'var(--text-primary)',
+    backgroundColor: 'transparent',
+  };
+
   return (
-    <div
-      className="rounded-lg animate-slide-in"
+    <section
+      aria-label="AI draft"
+      className="animate-slide-in"
       style={{
-        backgroundColor: 'var(--bg-elevated)',
-        border: '1px solid var(--border)',
+        backgroundColor: 'var(--bg-base)',
         borderLeft: '3px solid var(--accent)',
+        borderRadius: 'var(--radius)',
       }}
     >
-      {/* Card header */}
-      <div
-        className="flex items-center justify-between px-4 py-2.5"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
-        <div className="flex items-center gap-2">
-          <span
-            className="flex items-center gap-1.5 text-xs font-mono font-semibold uppercase tracking-wider"
-            style={{ color: 'var(--accent)' }}
-          >
-            <Icon name="sparkle" size={13} />
-            AI Draft Response
-          </span>
-          {intent && (
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded font-mono"
-              style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-muted)' }}
-            >
-              intent: {intent}
-            </span>
-          )}
-        </div>
-        {confidence != null && (
-          <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-            {Math.round(confidence * 100)}% match
-          </span>
-        )}
+      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+        <Icon name="sparkle" size={13} />
+        <span className="text-[12px] font-mono" style={{ color: 'var(--text-secondary)' }}>
+          AI draft
+        </span>
       </div>
 
-      {/* Content */}
-      <div className="p-4">
+      <div className="px-4 pb-4">
         {isEditing ? (
           <div className="space-y-3">
             <textarea
               value={editedText}
               onChange={(e) => setEditedText(e.target.value)}
               rows={5}
-              className="w-full p-3 text-sm rounded-md leading-relaxed"
+              className="w-full p-3 text-[13px] leading-relaxed"
               style={{
                 backgroundColor: 'var(--bg-surface)',
                 border: '1px solid var(--accent)',
+                borderRadius: 'var(--radius)',
                 color: 'var(--text-primary)',
                 resize: 'vertical',
               }}
-              placeholder="Edit draft response before sending…"
+              placeholder="Edit the draft before sending"
             />
             <div className="flex justify-end gap-2">
               <button
                 onClick={handleCancelEdit}
-                className="px-3 py-1.5 text-xs rounded-md font-medium transition-colors"
-                style={{
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-secondary)',
-                  backgroundColor: 'transparent',
-                }}
+                className="px-3 py-1.5 text-[13px] font-medium"
+                style={secondaryButton}
               >
                 Cancel
               </button>
               <button
+                id="btn-save-draft"
                 onClick={handleSaveEdit}
-                className="px-4 py-1.5 text-xs rounded-md font-medium text-white"
-                style={{ backgroundColor: 'var(--accent)' }}
+                className="px-3.5 py-1.5 text-[13px] font-medium"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: 'var(--on-accent)',
+                  borderRadius: 'var(--radius)',
+                }}
               >
-                Save & Dispatch
+                Save and send
               </button>
             </div>
           </div>
         ) : (
           <>
             <p
-              className="text-sm leading-relaxed whitespace-pre-wrap mb-4"
+              className="text-[13px] leading-relaxed whitespace-pre-wrap"
               style={{ color: 'var(--text-primary)' }}
             >
               {draftResponse}
             </p>
 
             {canInteract && (
-              <div
-                className="flex items-center gap-2 pt-3"
-                style={{ borderTop: '1px solid var(--border)' }}
-              >
+              <div className="flex items-center gap-2 pt-3 mt-3" style={{ borderTop: '1px solid var(--border-hairline)' }}>
                 {onApprove && (
                   <button
                     id="btn-approve-draft"
                     onClick={onApprove}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded-md font-medium text-white transition-opacity hover:opacity-90"
-                    style={{ backgroundColor: 'var(--green)' }}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 text-[13px] font-medium"
+                    style={{
+                      backgroundColor: 'var(--accent)',
+                      color: 'var(--on-accent)',
+                      borderRadius: 'var(--radius)',
+                    }}
                   >
-                    <Icon name="check" size={14} /> Approve & Send
+                    <Icon name="check" size={14} />
+                    Approve and send
                   </button>
                 )}
                 {onEdit && (
                   <button
                     id="btn-edit-draft"
                     onClick={() => setIsEditing(true)}
-                    className="px-3.5 py-1.5 text-sm rounded-md font-medium transition-colors"
-                    style={{
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-primary)',
-                      backgroundColor: 'transparent',
-                    }}
+                    className="px-3.5 py-1.5 text-[13px] font-medium"
+                    style={secondaryButton}
                   >
-                    Edit Draft
+                    Edit
                   </button>
                 )}
                 {onReject && (
                   <button
                     id="btn-reject-draft"
                     onClick={onReject}
-                    className="px-3.5 py-1.5 text-sm rounded-md font-medium transition-colors ml-auto"
+                    className="px-3.5 py-1.5 text-[13px] font-medium ml-auto"
                     style={{
-                      border: '1px solid var(--red)',
-                      color: 'var(--red)',
+                      border: '1px solid var(--status-low)',
+                      borderRadius: 'var(--radius)',
+                      color: 'var(--status-low)',
                       backgroundColor: 'transparent',
                     }}
                   >
-                    Reject & Escalate
+                    Reject and escalate
                   </button>
                 )}
               </div>
@@ -170,6 +156,6 @@ export const DraftCard: React.FC<DraftCardProps> = ({
           </>
         )}
       </div>
-    </div>
+    </section>
   );
 };

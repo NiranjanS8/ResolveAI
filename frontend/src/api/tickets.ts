@@ -23,6 +23,15 @@ export interface AuditLogItem {
   created_at: string;
 }
 
+export interface RetrievedChunk {
+  id?: string;
+  content?: string;
+  source_id?: string;
+  source_type?: string;
+  doc_title?: string;
+  score?: number;
+}
+
 export interface Ticket {
   id: string;
   customer_id: string;
@@ -35,6 +44,7 @@ export interface Ticket {
   sentiment: 'positive' | 'neutral' | 'negative' | null;
   confidence: number | null;
   draft_response?: string | null;
+  retrieved_context?: RetrievedChunk[] | null;
   created_at: string;
   updated_at: string;
   messages?: TicketMessage[];
