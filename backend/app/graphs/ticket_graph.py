@@ -8,6 +8,7 @@ from app.schemas.classification import ClassificationOutput, DraftOutput
 from app.core.model_registry import get_model_config
 from app.core.llm import invoke_structured_llm
 from app.core.outbound import record_generated_deviation, send_customer_message
+from app.core.promises import find_unverified_promises
 from app.core.prompt_safety import (
     UNTRUSTED_DATA_GUARD,
     data_section,
@@ -44,7 +45,7 @@ Report confidence honestly. It decides whether a customer reply is sent automati
 Do not default to a high number: vague or underspecified tickets must score below 0.70."""
 
 
-DRAFT_PROMPT_VERSION = "draft-plain-v1"
+DRAFT_PROMPT_VERSION = "draft-plain-v2"
 
 PLAIN_TEXT_RULES = """Write plain text only. No Markdown: no asterisks, underscores for emphasis, backticks, # headings, or table syntax. For lists use numbered lines like "1." or short separate sentences. Do not use emojis."""
 
@@ -57,6 +58,7 @@ Requirements:
 - Be concise and friendly (at most about 150 words).
 - Address the customer's actual request directly; acknowledge their tone.
 - Rely only on the knowledge base excerpts provided. Never invent policies, prices, dates, or promises.
+- Never say that an action has been taken or will be taken on the customer's account. You cannot issue refunds, cancel orders, reset passwords or change accounts, so do not promise any of them; describe what happens next and say a specialist will follow up.
 - If the excerpts do not cover the request, say a specialist will follow up shortly instead of guessing.
 - {PLAIN_TEXT_RULES}
 - Sign off as "ResolveAI Support"."""
@@ -330,9 +332,13 @@ def decide_node(state: TicketState) -> TicketState:
     - Per-intent thresholds (configurable, not hardcoded)
     
     Three conditional edges:
-    - high → auto_resolve (stub for now, real actions in Phase 7)
+    - high → auto_resolve
     - medium → draft_for_review (generates AI draft, calls interrupt())
     - low → escalate (no draft, goes straight to human)
+
+    A high score is necessary but not sufficient: a draft that promises an action
+    only a human route can perform is downgraded to review, because the model
+    writes those sentences confidently.
     """
     intent = state.get("intent", "general")
     urgency = state.get("urgency", "medium")
@@ -360,11 +366,33 @@ def decide_node(state: TicketState) -> TicketState:
         (chunk.get("score", 0.0) for chunk in (state.get("retrieved_context") or [])),
         default=0.0,
     )
+    routing_score = f"{confidence * relevance:.4f}"
+
+    # Confidence decides how well the ticket matched, not what we are allowed to
+    # promise. Nothing here or downstream can execute a refund, a cancellation or
+    # a password reset on its own, so a reply that says one happened is false, and
+    # it goes to a human instead of to the customer.
+    if decision == "auto_resolve":
+        promises = find_unverified_promises(draft_response)
+        if promises:
+            decision = "draft_for_review"
+            log_audit_action(
+                state.get("ticket_id"),
+                "unverified_promise_blocked",
+                {
+                    "promises": promises,
+                    "intent": intent,
+                    "routing_score": routing_score,
+                },
+                state.get("confidence"),
+                executed_by="ticket_graph.decide_node",
+            )
+
     return {
         **state,
         "decision": decision,
         "confidence": str(confidence),
-        "routing_score": f"{confidence * relevance:.4f}",
+        "routing_score": routing_score,
         "draft_response": draft_response,
         "status": "draft_for_review" if decision == "draft_for_review" else "deciding",
     }
