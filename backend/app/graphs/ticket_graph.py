@@ -36,6 +36,16 @@ Also determine:
 Return structured output with reasoning."""
 
 
+DRAFT_PROMPT = """You are a customer support agent for an e-commerce company. Write the reply that will be sent to the customer.
+
+Requirements:
+- Be concise and friendly (at most about 150 words).
+- Address the customer's actual request directly; acknowledge their tone.
+- Rely only on the knowledge base excerpts provided. Never invent policies, prices, dates, or promises.
+- If the excerpts do not cover the request, say a specialist will follow up shortly instead of guessing.
+- Sign off as "ResolveAI Support"."""
+
+
 def classify_node(state: TicketState) -> TicketState:
     primary_config = get_model_config("classifier")
     fallback_config = primary_config.fallback
@@ -151,9 +161,11 @@ def _compute_decision(
     """
     from app.core.thresholds import thresholds_for
 
-    # Retrieve relevance: how many knowledge base chunks matched
-    relevance = len(state.get("retrieved_context", [])) / 5.0 if state.get("retrieved_context") else 0.0
-    
+    # Retrieval relevance: how well the best knowledge-base chunk matches. A
+    # count-based ratio is always ~1.0 for dense embeddings and carries no
+    # signal, so the top similarity score is what actually gates confidence.
+    relevance = max((chunk.get("score", 0.0) for chunk in retrieved_context), default=0.0)
+
     # Confidence score: classifier confidence weighted by retrieval relevance
     confidence_score = float(confidence) * relevance
     
@@ -171,12 +183,66 @@ def _compute_decision(
         return "escalate"
 
 
+def _knowledge_excerpts(state: TicketState) -> str:
+    """Format the retrieved knowledge-base chunks for the drafter prompt."""
+    excerpts = [chunk.get("content", "") for chunk in state.get("retrieved_context", [])]
+    excerpts = [excerpt for excerpt in excerpts if excerpt]
+    if not excerpts:
+        return "(no matching knowledge base article found)"
+    return "\n".join(f"- {excerpt}" for excerpt in excerpts[:3])
+
+
+def _generate_draft(state: TicketState, intent: str) -> str:
+    """Draft a customer reply with the drafter model, grounded in retrieval."""
+    config = get_model_config("drafter")
+    llm = create_llm(config)
+    if config.fallback:
+        llm = llm.with_fallbacks([create_llm(config.fallback)], exception_type=Exception)
+
+    request = (
+        f"Subject: {state.get('subject', '')}\n"
+        f"Body: {state.get('body', '')}\n"
+        f"Detected intent: {intent}; urgency: {state.get('urgency', 'medium')}; "
+        f"sentiment: {state.get('sentiment', 'neutral')}\n\n"
+        f"Knowledge base excerpts:\n{_knowledge_excerpts(state)}"
+    )
+
+    start = time.perf_counter()
+    reply = llm.invoke([("system", DRAFT_PROMPT), ("human", request)])
+    latency_ms = int((time.perf_counter() - start) * 1000)
+
+    with SyncSessionLocal() as db:
+        db.add(ProviderCall(
+            id=uuid4(),
+            provider=config.provider,
+            model=config.model,
+            task="drafter",
+            latency_ms=str(latency_ms),
+            success="true",
+        ))
+        db.commit()
+
+    content = reply.content
+    if isinstance(content, list):
+        content = " ".join(str(part) for part in content)
+    return str(content).strip()
+
+
+def _fallback_draft(state: TicketState, intent: str) -> str:
+    """Deterministic draft used when the drafter model is unavailable."""
+    return (
+        f"Thanks for contacting us about \"{state.get('subject', '')}\". "
+        f"We're looking into your {intent} request and a specialist will follow up shortly. "
+        "— ResolveAI Support"
+    )
+
+
 def decide_node(state: TicketState) -> TicketState:
     """Decision node with real confidence-threshold logic.
     
     Routes based on:
     - Classifier confidence
-    - Retrieval relevance (number of matching knowledge chunks)
+    - Retrieval relevance (top knowledge-chunk similarity)
     - Per-intent thresholds (configurable, not hardcoded)
     
     Three conditional edges:
@@ -198,27 +264,10 @@ def decide_node(state: TicketState) -> TicketState:
     # Build draft_response only for draft_for_review path
     draft_response = None
     if decision == "draft_for_review":
-        # Generate AI draft response grounded in retrieved context
-        retrieved = state.get("retrieved_context", [])
-        context_parts = []
-        for chunk in retrieved:
-            if chunk.get("content"):
-                context_parts.append(chunk["content"])
-        
-        context_str = " ".join(context_parts[:3]) if context_parts else "your issue"
-        
-        draft_response = f"""Regarding your ticket about {state.get('subject', '')}: 
-
-Based on the analysis of your issue and our knowledge base, here is a draft response:
-
-For {intent} issues like yours, we typically recommend: 
-- Reviewing the relevant policies and guidelines
-- Following the standard troubleshooting steps
-- Contacting support if the issue persists
-
-The retrieved context includes information about: {', '.join([c.get('content', '')[:80] for c in retrieved[:3]])}
-
-Please review this draft and either approve it for sending, edit it before sending, or escalate to a human agent."""
+        try:
+            draft_response = _generate_draft(state, intent)
+        except Exception:
+            draft_response = _fallback_draft(state, intent)
 
     return {
         **state,
