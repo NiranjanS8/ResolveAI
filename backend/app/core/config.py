@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # automatically from whichever API keys are configured.
     LLM_PROVIDER_ORDER: Optional[str] = None
     EMBEDDING_PROVIDER: Optional[str] = None
+
+    # Knowledge base ingestion and retrieval
+    # Empty means "<repo root>/knowledge"; set to point at an external docs folder.
+    KNOWLEDGE_DIR: str = ""
+    KNOWLEDGE_CHUNK_SIZE: int = 900
+    KNOWLEDGE_CHUNK_OVERLAP: int = 150
+    RETRIEVAL_TOP_K: int = 5
     
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]

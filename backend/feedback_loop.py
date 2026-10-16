@@ -27,11 +27,11 @@ from app.core.config import settings
 from app.core.embeddings import embed_text
 
 
-# Similarity cosine between two embedding strings (FLOAT[] arrays)
+# Similarity cosine between two embedding strings (pgvector literals)
 def _cosine_similarity_embedding(emb_a: str, emb_b: str) -> float:
-    """Compute cosine similarity between two PostgreSQL FLOAT[] arrays."""
+    """Compute cosine similarity between two pgvector literal strings."""
     import re
-    # Extract float values from PG array string like "{0.1,0.2,0.3}"
+    # Extract float values from a vector literal like "[0.1,0.2,0.3]"
     nums_a = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", emb_a)]
     nums_b = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", emb_b)]
     
@@ -54,8 +54,8 @@ def compute_content_hash(content: str) -> str:
 
 
 def format_pg_array(floats: list[float]) -> str:
-    """Format a list of floats as a PostgreSQL FLOAT[] array string."""
-    return "{" + ",".join(f"{v:.6f}" for v in floats) + "}"
+    """Format a list of floats as a pgvector literal, e.g. ``[0.1,0.2]``."""
+    return "[" + ",".join(f"{v:.6f}" for v in floats) + "]"
 
 
 def feedback_loop():
@@ -159,7 +159,7 @@ def feedback_loop():
                 
                 cur_insert.execute(
                     """INSERT INTO knowledge_chunks (id, source_id, source_type, content, embedding, meta)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                       VALUES (%s, %s, %s, %s, %s::vector, %s)""",
                     (
                         chunk["id"],
                         chunk["source_id"],

@@ -1,146 +1,69 @@
-"""Ingest a small FAQ/knowledge base into the knowledge_chunks table.
+"""CLI: (re)index the ResolveAI knowledge base into pgvector.
+
+Documents are read from the repository's ``knowledge/`` folder unless
+``--path`` points somewhere else. Supported formats: Markdown, plain text and
+HTML.
 
 Usage:
     python ingest_knowledge.py
+    python ingest_knowledge.py --path ../knowledge
+    python ingest_knowledge.py --dry-run
+    python ingest_knowledge.py --keep-orphans
 
-This script:
-- Chunks provided FAQ docs into segments
-- Generates embeddings via the shared embedding function (Gemini, Mistral or
-  OpenAI when a key is configured, deterministic local vectors otherwise)
-- Stores embeddings in the knowledge_chunks table
-- Is idempotent: skips chunks that already exist and already use the current
-  embedding dimension, re-embedding them when the embedding provider changes
+Re-running is idempotent: unchanged documents are skipped, edited documents
+have their chunks replaced, and (unless ``--keep-orphans``) chunks whose
+document no longer exists are pruned.
 """
-import hashlib
-import os
-import time
-import json
-import psycopg2
-from uuid import uuid4
+import argparse
+from pathlib import Path
 
-from app.core.config import settings
-from app.core.embeddings import embed_text, embedding_dimension
+from app.core.knowledge import ingest, knowledge_dir
 
 
-# Simple FAQ knowledge base for MVP (5 docs)
-FAQ_KNOWLEDGE_BASE: list[dict] = [
-    {
-        "id": "faq_1",
-        "title": "Refund Policy",
-        "content": "Our refund policy allows returns within 30 days of purchase for a full refund, provided the product is in original condition. Refunds are processed within 5-7 business days.",
-        "source_type": "policy",
-    },
-    {
-        "id": "faq_2",
-        "title": "Shipping Information",
-        "content": "Standard shipping takes 5-7 business days. Express shipping takes 2-3 business days. Orders are shipped from our warehouse in New York.",
-        "source_type": "policy",
-    },
-    {
-        "id": "faq_3",
-        "title": "Password Reset",
-        "content": "To reset your password, click 'Forgot Password' on the login page and enter your email address. You'll receive a reset link within minutes. If you don't receive the email, check your spam folder.",
-        "source_type": "support",
-    },
-    {
-        "id": "faq_4",
-        "title": "Billing Cycle",
-        "content": "Billing occurs monthly on the anniversary of your subscription start date. You can view your billing history in the account settings. Cancel anytime before your next billing cycle.",
-        "source_type": "policy",
-    },
-    {
-        "id": "faq_5",
-        "title": "Technical Support",
-        "content": "For technical issues, please describe the problem including error messages, what you were doing when it occurred, and your browser/device information. Our typical response time is within 24 hours.",
-        "source_type": "support",
-    },
-]
-
-
-def compute_content_hash(content: str) -> str:
-    """Compute a hash for content to check idempotency."""
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
-
-
-def format_pg_array(floats: list[float]) -> str:
-    """Format a list of floats as a PostgreSQL FLOAT[] array string."""
-    return "{" + ",".join(f"{v:.6f}" for v in floats) + "}"
-
-
-def ingest_knowledge_base():
-    """Ingest the FAQ knowledge base into the database."""
-    target_dim = embedding_dimension()
-
-    conn = psycopg2.connect(settings.DATABASE_URL.replace("+psycopg", ""))
-    conn.autocommit = False
-    cur = conn.cursor()
-
-    # Existing chunks keyed by content hash, carrying the dimension of the
-    # stored embedding so we can re-embed when the embedding provider changes.
-    cur.execute(
-        "SELECT id, content, coalesce(array_length(embedding, 1), 0) FROM knowledge_chunks"
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Ingest the ResolveAI knowledge base.")
+    parser.add_argument(
+        "--path",
+        default=None,
+        help="Documents folder (defaults to the repository knowledge/ directory).",
     )
-    existing_chunks = {
-        compute_content_hash(content): (chunk_id, int(dim or 0))
-        for chunk_id, content, dim in cur.fetchall()
-    }
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without writing anything.",
+    )
+    parser.add_argument(
+        "--keep-orphans",
+        action="store_true",
+        help="Keep chunks whose source document no longer exists.",
+    )
+    args = parser.parse_args()
 
-    inserted = 0
-    updated = 0
+    root = Path(args.path).expanduser().resolve() if args.path else knowledge_dir()
 
-    for doc in FAQ_KNOWLEDGE_BASE:
-        content = doc["content"]
-        content_hash = compute_content_hash(content)
-        current = existing_chunks.get(content_hash)
+    print("=" * 60)
+    print("ResolveAI Knowledge Base Ingestion")
+    print("=" * 60)
+    print(f"Documents folder : {root}")
+    print()
 
-        if current and current[1] == target_dim:
-            print(f"Skipping existing chunk (id={doc['id']})")
-            continue
+    report = ingest(root, prune=not args.keep_orphans, dry_run=args.dry_run)
 
-        # Generate embedding using the shared embedding function so that
-        # indexed vectors match query vectors at retrieval time.
-        embedding = embed_text(content)
-        embedding_str = format_pg_array(embedding)
-        meta_json = json.dumps({
-            "title": doc["title"],
-            "source_id": doc["id"],
-            "ingested_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        })
-
-        if current:
-            cur.execute(
-                "UPDATE knowledge_chunks SET embedding = %s, meta = %s WHERE id = %s",
-                (embedding_str, meta_json, current[0]),
-            )
-            updated += 1
-            print(f"Re-embedded chunk: {doc['id']} ({current[1]} -> {len(embedding)} dims)")
-        else:
-            cur.execute(
-                "INSERT INTO knowledge_chunks (id, source_id, source_type, content, embedding, meta) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (str(uuid4()), doc["id"], doc["source_type"], content, embedding_str, meta_json),
-            )
-            inserted += 1
-            print(f"Prepared chunk: {doc['id']} (embedding dimension: {len(embedding)})")
-
-    conn.commit()
-    if inserted or updated:
-        print(f"Knowledge base updated: {inserted} inserted, {updated} re-embedded")
+    print(f"Documents        : {report.documents}")
+    print(f"Chunks           : {report.chunks_total}")
+    print(f"Inserted         : {report.inserted}")
+    print(f"Unchanged        : {report.unchanged}")
+    print(f"Pruned           : {report.pruned}")
+    print(f"Embedding model  : {report.embedding_model} ({report.dimension} dims)")
+    print()
+    if args.dry_run:
+        print("Dry run - nothing was written.")
+    elif not (report.inserted or report.pruned):
+        print("Knowledge base already up to date - nothing to do.")
     else:
-        print("All chunks already exist and are up to date - nothing to do")
-
-    cur.close()
-    conn.close()
+        print("Ingestion complete.")
+    return 0
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("ResolvAI Knowledge Base Ingestion")
-    print("=" * 60)
-    print(f"Knowledge base items: {len(FAQ_KNOWLEDGE_BASE)}")
-    print()
-    ingest_knowledge_base()
-    print()
-    print("=" * 60)
-    print("Ingestion complete!")
-    print("=" * 60)
+    raise SystemExit(main())

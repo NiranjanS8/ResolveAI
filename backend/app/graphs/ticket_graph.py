@@ -100,33 +100,40 @@ def retrieve_node(state: TicketState) -> TicketState:
     """Retrieve the most relevant knowledge-base chunks for the ticket.
 
     Embeds the ticket subject+body with the shared embedding function and ranks
-    stored chunks by cosine similarity. Embeddings are stored as a plain
-    ``FLOAT[]`` column, so similarity is computed in Python (fine at MVP scale).
+    stored chunks with pgvector's cosine-distance operator. The embedding
+    column is an unconstrained ``vector`` because the embedding provider is
+    switchable, so rows whose dimension differs from the query are ignored.
     """
     from sqlalchemy import text as sq_text
     from app.db.session import sync_engine
-    from app.core.embeddings import embed_text, cosine_similarity
+    from app.core.embeddings import embed_text
 
     query_text = f"{state['subject']} {state['body']}"
     embedding = embed_text(query_text)
+    vector_literal = "[" + ",".join(f"{value:.8f}" for value in embedding) + "]"
 
     retrieved_context = []
     try:
         with sync_engine.connect() as conn:
-            rows = conn.execute(sq_text("""
-                SELECT id, content, source_id, source_type, embedding
-                FROM knowledge_chunks
-            """)).fetchall()
+            rows = conn.execute(
+                sq_text("""
+                    SELECT id, content, source_id, source_type, doc_title,
+                           1 - (embedding <=> CAST(:query AS vector)) AS score
+                    FROM knowledge_chunks
+                    WHERE embedding IS NOT NULL
+                      AND vector_dims(embedding) = :dimension
+                    ORDER BY embedding <=> CAST(:query AS vector)
+                    LIMIT :limit
+                """),
+                {
+                    "query": vector_literal,
+                    "dimension": len(embedding),
+                    "limit": settings.RETRIEVAL_TOP_K,
+                },
+            ).fetchall()
 
-        scored = []
         for row in rows:
-            chunk_embedding = list(row[4]) if row[4] else []
-            score = cosine_similarity(embedding, chunk_embedding)
-            scored.append((score, row))
-
-        scored.sort(key=lambda item: item[0], reverse=True)
-
-        for score, row in scored[:5]:
+            score = float(row[5]) if row[5] is not None else 0.0
             if score <= 0:
                 continue
             retrieved_context.append({
@@ -134,6 +141,7 @@ def retrieve_node(state: TicketState) -> TicketState:
                 "content": row[1],
                 "source_id": row[2],
                 "source_type": row[3],
+                "doc_title": row[4],
                 "score": round(score, 4),
             })
     except Exception:

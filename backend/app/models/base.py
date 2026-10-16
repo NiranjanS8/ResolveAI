@@ -13,9 +13,10 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
-from sqlalchemy import Float
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Integer
 from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
 
 from app.db.session import Base
 
@@ -118,7 +119,12 @@ class KnowledgeChunk(Base):
     source_id = Column(String(255), nullable=False, index=True)
     source_type = Column(String(50), nullable=False)
     content = Column(Text, nullable=False)
-    embedding = Column(ARRAY(Float), nullable=True)
+    embedding = Column(Vector(), nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    doc_title = Column(String(500), nullable=True)
+    source_path = Column(Text, nullable=True)
+    chunk_index = Column(Integer, nullable=True)
+    content_hash = Column(String(64), nullable=True)
     meta = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

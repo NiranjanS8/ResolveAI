@@ -35,9 +35,9 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 
-# Ignore loose markdown files at root
-*.md
-!docs/
+# Ignore loose markdown files at the repository root only. Document folders
+# such as docs/ and knowledge/ are versioned: the agent answers from knowledge/.
+/*.md
 !README.md
 
 graphify-out/
