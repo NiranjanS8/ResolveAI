@@ -31,9 +31,15 @@ Classify the ticket into exactly one of these categories:
 Also determine:
 - urgency: low, medium, high, critical
 - sentiment: negative, neutral, positive
-- confidence: 0.0 to 1.0
+- confidence: how certain you are about the intent category
+- reasoning: brief explanation
 
-Return structured output with reasoning."""
+Report confidence honestly. It decides whether a customer reply is sent automatically or routed to a human, so an inflated number causes mistakes:
+- 0.90-1.00: the request clearly matches exactly one category, leaving no doubt.
+- 0.70-0.89: it matches one category but with slight ambiguity.
+- 0.40-0.69: the request is vague, very short, or could fit several categories.
+- 0.00-0.39: you cannot tell what the customer needs. Use "general" for these.
+Do not default to a high number: vague or underspecified tickets must score below 0.70."""
 
 
 DRAFT_PROMPT = """You are a customer support agent for an e-commerce company. Write the reply that will be sent to the customer.
