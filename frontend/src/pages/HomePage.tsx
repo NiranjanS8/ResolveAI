@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   type Ticket,
   type TicketCreate,
@@ -41,12 +41,24 @@ export const HomePage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'queue' | 'analytics'>('queue');
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [filterChannel, setFilterChannel] = useState<'all' | Channel>('all');
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  /* Which ticket stays open, readable from the poller without making the poller
+     depend on `selectedTicket`. That dependency was the switching bug: `loadData`
+     wrote `selectedTicket`, which changed `loadData`'s identity, which restarted
+     the effect that calls `loadData` — so the page polled in a loop, and racing
+     responses repainted the pane with whichever ticket answered last.
+     `undefined` = nothing chosen yet, `null` = the user closed the pane. */
+  const selectedIdRef = useRef<string | null | undefined>(undefined);
+  // Monotonic token: a detail response older than the current one is dropped.
+  const detailRequestRef = useRef(0);
 
   const addToast = (type: ToastMessage['type'], message: string) => {
     const id = `toast_${Date.now()}_${Math.random()}`;
@@ -60,17 +72,50 @@ export const HomePage: React.FC = () => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
-  const loadTicketDetail = useCallback(async (ticket: Ticket) => {
+  /** Load the full record for a ticket — its messages, audit log and retrieved
+      sources — which the list endpoint omits. The result is applied only if the
+      same ticket is still selected and no newer request has overtaken it, so a
+      slow response can never put one customer's conversation under another
+      customer's header. */
+  const refreshDetail = useCallback(async (ticketId: string, silent = false) => {
+    const requestId = ++detailRequestRef.current;
+    if (!silent) setDetailLoading(true);
     try {
-      // The list endpoint omits messages/audit logs, so fetch the full record
-      // whenever a ticket is selected.
-      const detail = await getTicket(ticket.id);
-      setSelectedTicket(detail);
-    } catch {
-      // Fall back to the list record: it is real, just without the detail
-      // payload, so the pane stays useful while the fetch is retried.
-      setSelectedTicket(ticket);
+      const detail = await getTicket(ticketId);
+      if (requestId === detailRequestRef.current && ticketId === selectedIdRef.current) {
+        setSelectedTicket(detail);
+        setDetailError(null);
+      }
+    } catch (error) {
+      // Keep the summary in the header, but never present its empty detail
+      // sections — conversation, sources, audit — as if they were empty facts.
+      if (requestId === detailRequestRef.current && ticketId === selectedIdRef.current) {
+        setDetailError(errorMessage(error));
+      }
+    } finally {
+      if (requestId === detailRequestRef.current) setDetailLoading(false);
     }
+  }, []);
+
+  /** Open a ticket from the queue: swap the pane to it immediately, then fill
+      in the detail. Showing the summary at once means the panel never lingers
+      on the ticket the agent just clicked away from. */
+  const handleSelectTicket = useCallback(
+    (ticket: Ticket) => {
+      selectedIdRef.current = ticket.id;
+      setSelectedTicket(ticket);
+      setDetailError(null);
+      void refreshDetail(ticket.id);
+    },
+    [refreshDetail],
+  );
+
+  const handleCloseDetail = useCallback(() => {
+    selectedIdRef.current = null;
+    detailRequestRef.current += 1; // abandon any detail still in flight
+    setSelectedTicket(null);
+    setDetailLoading(false);
+    setDetailError(null);
   }, []);
 
   const loadData = useCallback(async () => {
@@ -81,18 +126,34 @@ export const HomePage: React.FC = () => {
       // probe, so the indicator can never read "Live" over a stale or failed list.
       setIsBackendConnected(true);
       setLoadError(null);
-      // Fall back to the newest ticket when the selected one is gone (deleted, or
-      // filtered out between polls) so the detail pane never strands a stale id.
-      const target = data.find((t) => t.id === selectedTicket?.id) ?? data[0];
-      if (target) await loadTicketDetail(target);
-      else setSelectedTicket(null);
+
+      const current = selectedIdRef.current;
+      const target =
+        current === null
+          ? null // the pane was closed on purpose; leave it closed
+          : current === undefined
+            ? data[0] ?? null // first load: open the newest ticket
+            : data.find((t) => t.id === current) ?? data[0] ?? null;
+
+      if (!target) {
+        selectedIdRef.current = null;
+        setSelectedTicket(null);
+        return;
+      }
+
+      // Only touch the pane when the queue says the selection changed; otherwise
+      // refresh the detail behind the agent's back instead of flashing a loader.
+      const changed = target.id !== selectedIdRef.current;
+      selectedIdRef.current = target.id;
+      if (changed) setSelectedTicket(target);
+      await refreshDetail(target.id, !changed);
     } catch (error) {
       setIsBackendConnected(false);
       setLoadError(errorMessage(error));
     } finally {
       setLoading(false);
     }
-  }, [selectedTicket, loadTicketDetail]);
+  }, [refreshDetail]);
 
   useEffect(() => {
     loadData();
@@ -104,7 +165,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await approveDraft(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       addToast('success', `Ticket #${ticket.id.slice(0, 8)} approved. AI draft dispatched to customer.`);
     } catch (error) {
       addToast('error', `Failed to approve #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
@@ -115,7 +176,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await editDraft(ticket.id, editedDraft);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       addToast('success', `Edited response for #${ticket.id.slice(0, 8)} sent successfully.`);
     } catch (error) {
       addToast('error', `Failed to send edited draft for #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
@@ -126,7 +187,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await rejectDraft(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       addToast('warning', `Ticket #${ticket.id.slice(0, 8)} draft rejected. Routed to a human.`);
     } catch (error) {
       addToast('error', `Failed to reject #${ticket.id.slice(0, 8)}: ${errorMessage(error)}`);
@@ -137,7 +198,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await processRefundAction(ticket.id, amount);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       if (amount > 2000) {
         addToast('warning', `Refund of ₹${amount} exceeds the ₹2,000 cap. Supervisor approval required.`);
       } else {
@@ -152,7 +213,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await processOrderStatusAction(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       addToast('info', `Order status lookup executed for #${ticket.id.slice(0, 8)}.`);
     } catch (error) {
       addToast('error', `Order status lookup failed: ${errorMessage(error)}`);
@@ -163,7 +224,7 @@ export const HomePage: React.FC = () => {
     try {
       const updated = await processPasswordResetAction(ticket.id);
       setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       addToast('success', `Secure password reset link dispatched to ${ticket.customer_id}`);
     } catch (error) {
       addToast('error', `Password reset failed: ${errorMessage(error)}`);
@@ -175,7 +236,7 @@ export const HomePage: React.FC = () => {
       const newMessage = await addMessage(ticket.id, text, 'agent');
       const updated: Ticket = { ...ticket, messages: [...(ticket.messages || []), newMessage] };
       setTickets((prev) => prev.map((t) => (t.id === ticket.id ? updated : t)));
-      await loadTicketDetail(updated);
+      await refreshDetail(updated.id, true);
       addToast('info', 'Message posted to the conversation.');
     } catch (error) {
       addToast('error', `Failed to send reply: ${errorMessage(error)}`);
@@ -186,7 +247,7 @@ export const HomePage: React.FC = () => {
     try {
       const created = await createTicket(formData);
       setTickets((prev) => [created, ...prev]);
-      await loadTicketDetail(created);
+      handleSelectTicket(created);
       setIsModalOpen(false);
       addToast('success', `Ticket #${created.id.slice(0, 8)} ingested. Classified as "${created.intent}".`);
     } catch (error) {
@@ -270,14 +331,18 @@ export const HomePage: React.FC = () => {
             <TicketList
               tickets={tickets}
               selectedTicketId={selectedTicket?.id}
-              onSelectTicket={loadTicketDetail}
+              onSelectTicket={handleSelectTicket}
               filterChannel={filterChannel}
               onFilterChannelChange={setFilterChannel}
             />
 
             {selectedTicket ? (
               <TicketDetailPane
+                key={selectedTicket.id}
                 ticket={selectedTicket}
+                isLoading={detailLoading}
+                detailError={detailError}
+                onRetryDetail={() => refreshDetail(selectedTicket.id)}
                 onApprove={handleApprove}
                 onEdit={handleEdit}
                 onReject={handleReject}
@@ -285,7 +350,7 @@ export const HomePage: React.FC = () => {
                 onOrderStatus={handleOrderStatus}
                 onPasswordReset={handlePasswordReset}
                 onSendMessage={handleSendMessage}
-                onClose={() => setSelectedTicket(null)}
+                onClose={handleCloseDetail}
               />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-center px-6">

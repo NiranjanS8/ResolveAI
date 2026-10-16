@@ -34,6 +34,9 @@ interface TicketDetailPaneProps {
   onPasswordReset: (ticket: Ticket) => void;
   onSendMessage: (ticket: Ticket, text: string) => void;
   onClose?: () => void;
+  isLoading?: boolean;
+  detailError?: string | null;
+  onRetryDetail?: () => void;
 }
 
 type DetailTab = 'decision' | 'conversation' | 'audit';
@@ -70,6 +73,9 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
   onPasswordReset,
   onSendMessage,
   onClose,
+  isLoading = false,
+  detailError = null,
+  onRetryDetail,
 }) => {
   const [replyText, setReplyText] = useState('');
   const [activeTab, setActiveTab] = useState<DetailTab>('decision');
@@ -99,10 +105,15 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
   const messages = ticket.messages ?? [];
   const auditLogs = ticket.audit_logs ?? [];
 
+  // The list endpoint omits messages, audit log and sources. Until the detail
+  // arrives, those sections hold nothing — so they must not be rendered as if
+  // they were empty on purpose.
+  const detailReady = !isLoading && !detailError;
+
   const TABS: Array<{ id: DetailTab; label: string; count?: number }> = [
     { id: 'decision', label: 'Decision trace' },
-    { id: 'conversation', label: 'Conversation', count: messages.length },
-    { id: 'audit', label: 'Audit log', count: auditLogs.length },
+    { id: 'conversation', label: 'Conversation', count: detailReady ? messages.length : undefined },
+    { id: 'audit', label: 'Audit log', count: detailReady ? auditLogs.length : undefined },
   ];
 
   const guardrails: Array<{ label: string; value: string }> = [
@@ -240,7 +251,49 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
 
       {/* ─── Content ────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-        {activeTab === 'decision' && (
+        {isLoading && (
+          <div className="h-full flex flex-col items-center justify-center gap-2">
+            <div
+              className="w-5 h-5 rounded-full border-2 animate-spin"
+              style={{ borderColor: 'var(--border-hairline)', borderTopColor: 'var(--text-primary)' }}
+            />
+            <span className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+              Loading ticket detail
+            </span>
+          </div>
+        )}
+
+        {!isLoading && detailError && (
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+            <span style={{ color: 'var(--status-low)' }}>
+              <Icon name="alert" size={20} />
+            </span>
+            <p className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
+              Could not load this ticket's detail
+            </p>
+            <p className="text-[12px] font-mono max-w-sm" style={{ color: 'var(--text-secondary)' }}>
+              {detailError}
+            </p>
+            <p className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>
+              The queue retries every 10 seconds.
+            </p>
+            {onRetryDetail && (
+              <button
+                onClick={onRetryDetail}
+                className="px-3 h-6 text-[12px] font-medium"
+                style={{
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border-hairline)',
+                  borderRadius: 'var(--radius)',
+                }}
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+
+        {detailReady && activeTab === 'decision' && (
           <>
             <section>
               <h3 className="text-[13px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
@@ -310,7 +363,7 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
           </>
         )}
 
-        {activeTab === 'conversation' && (
+        {detailReady && activeTab === 'conversation' && (
           <div>
             {messages.length > 0 ? (
               messages.map((message) => {
@@ -357,7 +410,7 @@ export const TicketDetailPane: React.FC<TicketDetailPaneProps> = ({
           </div>
         )}
 
-        {activeTab === 'audit' && (
+        {detailReady && activeTab === 'audit' && (
           <div>
             {auditLogs.length > 0 ? (
               auditLogs.map((log) => (
