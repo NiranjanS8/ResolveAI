@@ -1,5 +1,6 @@
 from uuid import uuid4
 import asyncio
+import logging
 from collections import defaultdict, deque
 from time import monotonic
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,6 +32,8 @@ from app.schemas.ticket import (
 )
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
+
+logger = logging.getLogger(__name__)
 
 # Phase 7: Action constants in Indian Rupees (₹)
 # 1 INR ≈ 0.012 USD, so $50 ≈ ₹4150, using ₹2000 as the cap for MVP
@@ -246,18 +249,15 @@ async def create_ticket(
     # block the FastAPI event loop for the full LLM round-trip (3–10s).
     try:
         result = await asyncio.to_thread(run_ticket_graph, ticket)
-        print(f"GRAPH RESULT: {result}")
+        logger.debug("graph run complete for ticket %s", ticket.id)
         # Update ticket with graph results
         apply_graph_result(ticket, result)
         await db.commit()
         await db.refresh(ticket)
-    except Exception as e:
-        # Log error but don't fail the request
-        import logging
-        logging.error(f"Graph run failed for ticket {ticket.id}: {e}")
-        print(f"GRAPH ERROR: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        # The ticket is still returned in its pre-graph state; the failure is
+        # logged with a traceback instead of being swallowed or printed.
+        logger.exception("graph run failed for ticket %s", ticket.id)
 
     return ticket
 

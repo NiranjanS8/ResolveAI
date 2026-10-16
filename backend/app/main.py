@@ -1,10 +1,19 @@
 import sys
 import asyncio
+import logging
 
 # CRITICAL: Set event loop policy BEFORE any other imports
 # This must be at the very top to work with uvicorn subprocesses
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# One logging configuration for the process: library and application records go
+# to stderr at INFO, so failures are visible instead of only reaching stdout via
+# uvicorn's access log.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
