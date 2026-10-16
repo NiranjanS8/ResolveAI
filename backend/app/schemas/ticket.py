@@ -44,16 +44,31 @@ class TicketMessageResponse(BaseModel):
         from_attributes = True
 
 
+class AuditLogResponse(BaseModel):
+    id: UUID
+    ticket_id: UUID
+    action: str
+    payload: Optional[dict]
+    confidence: Optional[str]
+    executed_by: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class TicketResponse(BaseModel):
     id: UUID
     customer_id: str
     subject: str
     body: str
+    channel: str
     status: TicketStatus
     intent: Optional[Intent]
     urgency: Optional[str]
     sentiment: Optional[str]
     confidence: Optional[str]
+    draft_response: Optional[str]
     created_at: datetime
     updated_at: datetime
 
@@ -62,7 +77,9 @@ class TicketResponse(BaseModel):
 
 
 class TicketDetailResponse(TicketResponse):
+    retrieved_context: Optional[list[dict]] = None
     messages: list[TicketMessageResponse] = []
+    audit_logs: list[AuditLogResponse] = []
 
 
 # Phase 7: Action schemas with INR (Indian Rupees) instead of USD

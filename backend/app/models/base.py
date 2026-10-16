@@ -67,6 +67,9 @@ class Ticket(Base):
     urgency = Column(String(50), nullable=True)
     sentiment = Column(String(50), nullable=True)
     confidence = Column(String(50), nullable=True)
+    channel = Column(String(20), nullable=False, server_default="chat", index=True)
+    draft_response = Column(Text, nullable=True)
+    retrieved_context = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
