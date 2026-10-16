@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     # LLM API Keys
     ANTHROPIC_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
+    MISTRAL_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = None
+    # The Google SDK also accepts GOOGLE_API_KEY; treated as an alias for Gemini.
+    GOOGLE_API_KEY: Optional[str] = None
+
+    # Provider preference (comma-separated). When unset, providers are selected
+    # automatically from whichever API keys are configured.
+    LLM_PROVIDER_ORDER: Optional[str] = None
+    EMBEDDING_PROVIDER: Optional[str] = None
     
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]

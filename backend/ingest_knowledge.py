@@ -5,10 +5,11 @@ Usage:
 
 This script:
 - Chunks provided FAQ docs into segments
-- Generates embeddings via the shared embedding function (OpenAI when a key
-  is configured, deterministic local vectors otherwise)
+- Generates embeddings via the shared embedding function (Gemini, Mistral or
+  OpenAI when a key is configured, deterministic local vectors otherwise)
 - Stores embeddings in the knowledge_chunks table
-- Is idempotent: skips chunks that already exist (based on content hash)
+- Is idempotent: skips chunks that already exist and already use the current
+  embedding dimension, re-embedding them when the embedding provider changes
 """
 import hashlib
 import os
@@ -18,7 +19,7 @@ import psycopg2
 from uuid import uuid4
 
 from app.core.config import settings
-from app.core.embeddings import embed_text
+from app.core.embeddings import embed_text, embedding_dimension
 
 
 # Simple FAQ knowledge base for MVP (5 docs)
@@ -68,75 +69,66 @@ def format_pg_array(floats: list[float]) -> str:
 
 def ingest_knowledge_base():
     """Ingest the FAQ knowledge base into the database."""
-    # Calculate which chunks already exist
+    target_dim = embedding_dimension()
+
     conn = psycopg2.connect(settings.DATABASE_URL.replace("+psycopg", ""))
     conn.autocommit = False
     cur = conn.cursor()
-    
-    # Get existing chunk contents for idempotency check
-    cur.execute("SELECT id, content FROM knowledge_chunks")
-    existing_chunks = {row[0]: row[1] for row in cur.fetchall()}
-    
-    new_chunks = []
-    
+
+    # Existing chunks keyed by content hash, carrying the dimension of the
+    # stored embedding so we can re-embed when the embedding provider changes.
+    cur.execute(
+        "SELECT id, content, coalesce(array_length(embedding, 1), 0) FROM knowledge_chunks"
+    )
+    existing_chunks = {
+        compute_content_hash(content): (chunk_id, int(dim or 0))
+        for chunk_id, content, dim in cur.fetchall()
+    }
+
+    inserted = 0
+    updated = 0
+
     for doc in FAQ_KNOWLEDGE_BASE:
         content = doc["content"]
         content_hash = compute_content_hash(content)
-        
-        # Check if chunk already exists (idempotency)
-        already_exists = any(
-            compute_content_hash(existing) == content_hash 
-            for existing in existing_chunks.values()
-        )
-        if already_exists:
+        current = existing_chunks.get(content_hash)
+
+        if current and current[1] == target_dim:
             print(f"Skipping existing chunk (id={doc['id']})")
             continue
-        
+
         # Generate embedding using the shared embedding function so that
         # indexed vectors match query vectors at retrieval time.
         embedding = embed_text(content)
-        # Format as PostgreSQL FLOAT[] array string
         embedding_str = format_pg_array(embedding)
-        
-        # Prepare chunk data
-        chunk_id = str(uuid4())
-        meta = {
+        meta_json = json.dumps({
             "title": doc["title"],
             "source_id": doc["id"],
             "ingested_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        meta_json = json.dumps(meta)
-        
-        new_chunks.append({
-            "id": chunk_id,
-            "source_id": doc["id"],
-            "source_type": doc["source_type"],
-            "content": content,
-            "embedding": embedding_str,
-            "meta_json": meta_json,
         })
-        print(f"Prepared chunk: {doc['id']} (embedding dimension: {len(embedding)})")
-    
-    # Insert new chunks into the database
-    if new_chunks:
-        for chunk in new_chunks:
+
+        if current:
+            cur.execute(
+                "UPDATE knowledge_chunks SET embedding = %s, meta = %s WHERE id = %s",
+                (embedding_str, meta_json, current[0]),
+            )
+            updated += 1
+            print(f"Re-embedded chunk: {doc['id']} ({current[1]} -> {len(embedding)} dims)")
+        else:
             cur.execute(
                 "INSERT INTO knowledge_chunks (id, source_id, source_type, content, embedding, meta) "
                 "VALUES (%s, %s, %s, %s, %s, %s)",
-                (
-                    chunk["id"],
-                    chunk["source_id"],
-                    chunk["source_type"],
-                    chunk["content"],
-                    chunk["embedding"],
-                    chunk["meta_json"],
-                )
+                (str(uuid4()), doc["id"], doc["source_type"], content, embedding_str, meta_json),
             )
-        conn.commit()
-        print(f"Successfully inserted {len(new_chunks)} new knowledge chunks")
+            inserted += 1
+            print(f"Prepared chunk: {doc['id']} (embedding dimension: {len(embedding)})")
+
+    conn.commit()
+    if inserted or updated:
+        print(f"Knowledge base updated: {inserted} inserted, {updated} re-embedded")
     else:
-        print("All chunks already exist - no new chunks inserted")
-    
+        print("All chunks already exist and are up to date - nothing to do")
+
     cur.close()
     conn.close()
 

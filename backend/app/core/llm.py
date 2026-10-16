@@ -9,24 +9,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import insert
 from app.models.base import ProviderCall
 from app.core.model_registry import get_model_config, ModelConfig
+from app.core.providers import api_key_for
 from app.core.config import settings
 
 
 def create_llm(config: ModelConfig) -> BaseChatModel:
+    api_key = api_key_for(config.provider)
+    if not api_key:
+        raise ValueError(
+            f"No API key configured for provider '{config.provider}'. "
+            f"Add the matching key to .env and restart the backend."
+        )
+
+    params = {
+        "model": config.model,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "api_key": api_key,
+    }
+
     if config.provider == "anthropic":
-        return ChatAnthropic(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-        )
-    elif config.provider == "openai":
-        return ChatOpenAI(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-        )
-    else:
-        raise ValueError(f"Unknown provider: {config.provider}")
+        return ChatAnthropic(**params)
+    if config.provider == "openai":
+        return ChatOpenAI(**params)
+    if config.provider == "mistral":
+        from langchain_mistralai import ChatMistralAI
+
+        return ChatMistralAI(**params)
+    if config.provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(**params)
+    raise ValueError(f"Unknown provider: {config.provider}")
 
 
 async def log_provider_call(

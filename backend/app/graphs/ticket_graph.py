@@ -40,10 +40,12 @@ def classify_node(state: TicketState) -> TicketState:
     primary_config = get_model_config("classifier")
     fallback_config = primary_config.fallback
     
-    primary_llm = create_llm(primary_config).with_structured_output(ClassificationOutput).with_fallbacks(
-        [create_llm(fallback_config).with_structured_output(ClassificationOutput)],
-        exception_type=Exception,
-    )
+    primary_llm = create_llm(primary_config).with_structured_output(ClassificationOutput)
+    if fallback_config:
+        primary_llm = primary_llm.with_fallbacks(
+            [create_llm(fallback_config).with_structured_output(ClassificationOutput)],
+            exception_type=Exception,
+        )
     
     messages = [
         ("system", CLASSIFY_PROMPT),

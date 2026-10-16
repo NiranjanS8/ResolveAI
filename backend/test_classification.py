@@ -6,6 +6,9 @@ from typing import List, Dict, Any
 # Set empty API keys - tests will verify structure, not actual LLM calls
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["OPENAI_API_KEY"] = ""
+os.environ["MISTRAL_API_KEY"] = ""
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["GOOGLE_API_KEY"] = ""
 
 from app.graphs.ticket_graph import classify_node, CLASSIFY_PROMPT
 from app.graphs.state import TicketState
@@ -138,33 +141,37 @@ def test_ticket_state_has_required_fields():
 
 
 def test_with_fallbacks_configured():
-    """Test that .with_fallbacks is configured on the classifier model."""
+    """Test that the classifier model config is internally consistent."""
     from app.core.model_registry import get_model_config
-    from app.core.llm import create_llm
-    from langchain_core.runnables import Runnable
-    
+    from app.core.providers import CHAT_PROVIDERS
+
     primary_config = get_model_config("classifier")
-    fallback_config = primary_config.fallback
-    
-    # Check primary LLM can be created with structured output
-    primary_llm = create_llm(primary_config)
-    
-    # Check that with_fallbacks method exists and is callable
-    has_with_fallbacks = hasattr(primary_llm, "with_fallbacks")
-    assert has_with_fallbacks, "LLM should have with_fallbacks method"
-    
-    # Test that we can chain with_fallbacks
-    structured_llm = primary_llm.with_structured_output(ClassificationOutput)
-    has_fallbacks_chain = hasattr(structured_llm, "with_fallbacks")
-    # Note: with_fallbacks may not be available on all LLM types, 
-    # what matters is the config has fallback defined
-    
-    # Verify fallback config is set
-    assert fallback_config is not None, "Classifier should have fallback config"
-    assert fallback_config.provider != "", "Fallback provider should be set"
-    assert fallback_config.model != "", "Fallback model should be set"
-    
-    print("PASS: .with_fallbacks() configuration is valid")
+
+    assert primary_config.provider in CHAT_PROVIDERS, "Primary provider must be known"
+    assert primary_config.model, "Primary model must be set"
+    assert primary_config.temperature == 0.0, "Classifier temperature should be 0.0"
+
+    if primary_config.fallback is not None:
+        assert primary_config.fallback.provider in CHAT_PROVIDERS, "Fallback provider must be known"
+        assert primary_config.fallback.provider != primary_config.provider, "Fallback must differ"
+        assert primary_config.fallback.model, "Fallback model must be set"
+
+    print("PASS: classifier model config is valid")
+
+
+def test_create_llm_requires_api_key():
+    """create_llm must fail clearly when the provider has no key configured."""
+    from app.core.llm import create_llm
+    from app.core.model_registry import ModelConfig
+
+    try:
+        create_llm(ModelConfig(provider="mistral", model="mistral-small-latest"))
+    except ValueError as exc:
+        assert "api key" in str(exc).lower(), "error should mention the missing API key"
+    else:
+        raise AssertionError("expected ValueError when no API key is configured")
+
+    print("PASS: create_llm rejects providers without an API key")
 
 
 def test_classification_pipeline_structure():
@@ -184,24 +191,34 @@ def test_classification_pipeline_structure():
 
 
 def test_model_registry():
-    """Test that model registry has classifier config."""
-    from app.core.model_registry import get_model_config, MODEL_REGISTRY
-    
+    """Test that the model registry resolves a valid provider set."""
+    from app.core.model_registry import MODEL_REGISTRY
+    from app.core.providers import CHAT_PROVIDERS
+
     # Verify classifier is in registry
     assert "classifier" in MODEL_REGISTRY, "classifier should be in MODEL_REGISTRY"
-    
+
     # Verify model config has expected fields
     classifier_config = MODEL_REGISTRY["classifier"]
-    assert classifier_config.provider == "anthropic", "Classifier provider should be anthropic"
-    assert classifier_config.model == "claude-3-haiku-20240307", "Classifier model should be haiku"
+    assert classifier_config.provider in CHAT_PROVIDERS, "Classifier provider should be known"
+    assert classifier_config.model, "Classifier model should be set"
     assert classifier_config.temperature == 0.0, "Classifier temperature should be 0.0"
-    
-    # Verify fallback is configured
-    assert classifier_config.fallback is not None, "Classifier should have fallback"
-    assert classifier_config.fallback.provider == "openai", "Fallback provider should be openai"
-    assert classifier_config.fallback.model == "gpt-4o-mini", "Fallback model should be gpt-4o-mini"
-    
+
     print("PASS: Model registry is configured correctly")
+
+
+def test_all_chat_providers_supported():
+    """Every advertised chat provider must have models and an API-key mapping."""
+    from app.core.model_registry import PROVIDER_MODELS
+    from app.core.providers import CHAT_PROVIDERS, api_key_for
+
+    for provider in CHAT_PROVIDERS:
+        assert provider in PROVIDER_MODELS, f"{provider} missing from PROVIDER_MODELS"
+        for task in ("classifier", "decider", "drafter"):
+            assert task in PROVIDER_MODELS[provider], f"{provider} missing task '{task}'"
+        api_key_for(provider)  # must resolve without raising
+
+    print("PASS: gemini/mistral/anthropic/openai are all wired")
 
 
 def test_provider_call_schema():
@@ -240,8 +257,10 @@ if __name__ == "__main__":
     test_classification_output_schema()
     test_ticket_state_has_required_fields()
     test_with_fallbacks_configured()
+    test_create_llm_requires_api_key()
     test_classification_pipeline_structure()
     test_model_registry()
+    test_all_chat_providers_supported()
     test_provider_call_schema()
     
     print()
