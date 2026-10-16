@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.tickets import router as tickets_router
+from app.api.analytics import router as analytics_router
 from app.core.config import settings
 from app.db.session import sync_engine, Base
 
@@ -39,3 +40,4 @@ app.add_middleware(
 
 app.include_router(health_router, prefix=settings.API_V1_STR)
 app.include_router(tickets_router, prefix=settings.API_V1_STR)
+app.include_router(analytics_router, prefix=settings.API_V1_STR)

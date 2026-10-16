@@ -657,7 +657,20 @@ export async function addMessage(ticketId: string, content: string, role: 'agent
 }
 
 export async function getAnalytics(range: '24h' | '7d' | '30d' = '30d'): Promise<AnalyticsData> {
-  // Aggregate real stats from current tickets
+  try {
+    const res = await fetch(`${API_BASE}/analytics?range=${range}`, { signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      isLiveBackend = true;
+      return await res.json();
+    }
+  } catch {
+    isLiveBackend = false;
+  }
+  // Offline fallback: derive a rough view from the in-memory demo tickets.
+  return buildMockAnalytics(range);
+}
+
+function buildMockAnalytics(range: '24h' | '7d' | '30d'): AnalyticsData {
   const total = mockTickets.length;
   const autoResolved = mockTickets.filter(t => t.status === 'auto_resolved').length;
   const draftForReview = mockTickets.filter(t => t.status === 'draft_for_review').length;
