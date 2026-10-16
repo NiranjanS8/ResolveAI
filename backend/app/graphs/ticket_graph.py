@@ -136,6 +136,10 @@ def retrieve_node(state: TicketState) -> TicketState:
     stored chunks with pgvector's cosine-distance operator. The embedding
     column is an unconstrained ``vector`` because the embedding provider is
     switchable, so rows whose dimension differs from the query are ignored.
+
+    A chunk promoted from an agent edit belongs to the customer whose ticket it
+    came from; it is served only to that customer. Chunks that predate that rule
+    carry no owner and are excluded too, because nothing approved them.
     """
     from sqlalchemy import text as sq_text
     from app.db.session import sync_engine
@@ -155,6 +159,10 @@ def retrieve_node(state: TicketState) -> TicketState:
                     FROM knowledge_chunks
                     WHERE embedding IS NOT NULL
                       AND vector_dims(embedding) = :dimension
+                      AND NOT (
+                          source_type = 'feedback'
+                          AND coalesce(meta->>'customer_id', '') <> :customer_id
+                      )
                     ORDER BY embedding <=> CAST(:query AS vector)
                     LIMIT :limit
                 """),
@@ -162,6 +170,7 @@ def retrieve_node(state: TicketState) -> TicketState:
                     "query": vector_literal,
                     "dimension": len(embedding),
                     "limit": settings.RETRIEVAL_TOP_K,
+                    "customer_id": state.get("customer_id") or "",
                 },
             ).fetchall()
 

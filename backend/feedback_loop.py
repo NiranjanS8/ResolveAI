@@ -1,56 +1,40 @@
 """Feedback Loop — Agent corrections make the system measurably better over time.
 
-Pulls recent agent_feedback rows where the agent significantly edited the draft,
-re-embeds them, and adds them to knowledge_chunks as "resolved ticket" examples.
+Pulls agent_feedback rows the operator has explicitly approved, re-embeds them,
+and adds them to knowledge_chunks as "resolved ticket" examples.
 
-Idempotent: skips chunks that already exist (based on content hash).
+Approval is not implicit. An agent edit is evidence that a draft was wrong; it is
+not evidence that the edit is correct or safe to serve to every future customer,
+and an agent can be talked into writing the wrong thing. So nothing is indexed
+until a human names the feedback row (``--approve``), and each promoted chunk
+records the customer it came from, so retrieval can keep it away from everyone
+else's tickets.
 
 Usage:
-    python feedback_loop.py
+    python feedback_loop.py                        # list candidates, index nothing
+    python feedback_loop.py --approve <id> [<id>]  # index exactly those
 
-This script:
-1. Queries the agent_feedback table for recent entries
-2. Determines which edits were significant (original != edited)
-3. Generates embeddings for the feedback pairs
-4. Stores them in knowledge_chunks with source_type="feedback"
-5. Runs a before/after retrieval quality check
-6. Is idempotent: re-running doesn't duplicate effective entries
+Idempotent: skips chunks that already exist (based on content hash).
 """
+import argparse
 import hashlib
-import os
 import json
-import math
-import psycopg2
+from datetime import datetime, timezone
 from uuid import uuid4
+
+import psycopg2
 
 from app.core.config import settings
 from app.core.embeddings import embed_text
+from app.core.knowledge import embedding_model_label
 
-
-# Similarity cosine between two embedding strings (pgvector literals)
-def _cosine_similarity_embedding(emb_a: str, emb_b: str) -> float:
-    """Compute cosine similarity between two pgvector literal strings."""
-    import re
-    # Extract float values from a vector literal like "[0.1,0.2,0.3]"
-    nums_a = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", emb_a)]
-    nums_b = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", emb_b)]
-    
-    if not nums_a or not nums_b or len(nums_a) != len(nums_b):
-        return 0.0
-    
-    dot = sum(x * y for x, y in zip(nums_a, nums_b))
-    norm_a = math.sqrt(sum(x * x for x in nums_a))
-    norm_b = math.sqrt(sum(x * x for x in nums_b))
-    
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    
-    return dot / (norm_a * norm_b)
+# Word-set overlap below this counts as a significant edit rather than rewording.
+SIGNIFICANT_EDIT_OVERLAP = 0.7
 
 
 def compute_content_hash(content: str) -> str:
     """Compute a hash for content to check idempotency."""
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
 def format_pg_array(floats: list[float]) -> str:
@@ -58,160 +42,195 @@ def format_pg_array(floats: list[float]) -> str:
     return "[" + ",".join(f"{v:.6f}" for v in floats) + "]"
 
 
-def feedback_loop():
-    """Main feedback loop function."""
-    # Connect to DB
-    conn = psycopg2.connect(settings.DATABASE_URL.replace("+psycopg", ""))
-    conn.autocommit = False
-    cur = conn.cursor()
-    
-    # Step 1: Query recent agent_feedback entries
-    cur.execute("""
-        SELECT id, original_draft, edited_response, agent_id, created_at
-        FROM agent_feedback
-        ORDER BY created_at DESC
-        LIMIT 10
-    """)
-    feedback_entries = cur.fetchall()
-    
-    print(f"Recent agent_feedback entries: {len(feedback_entries)}")
-    
-    new_chunks = []
-    
-    for feedback_id, original_draft, edited_response, agent_id, created_at in feedback_entries:
-        # Determine if the edit was significant
-        # An edit is significant if the edited response is meaningfully different
-        # and the original draft was not empty
+def _is_significant_edit(original_draft: str, edited_response: str) -> tuple[bool, float]:
+    """Whether the agent changed the draft materially, and the word-set overlap."""
+    original_words = set(original_draft.lower().split())
+    edited_words = set(edited_response.lower().split())
+    union = original_words | edited_words
+    if not union:
+        return True, 0.0
+    overlap = len(original_words & edited_words) / len(union)
+    return overlap < SIGNIFICANT_EDIT_OVERLAP, overlap
+
+
+def _candidates(cur) -> list[tuple]:
+    """Recent feedback rows that would promote, with their ticket's customer."""
+    cur.execute(
+        """
+        SELECT f.id, f.original_draft, f.edited_response, f.agent_id, f.created_at,
+               t.customer_id
+        FROM agent_feedback f
+        JOIN tickets t ON t.id = f.ticket_id
+        ORDER BY f.created_at DESC
+        LIMIT 50
+        """
+    )
+    return cur.fetchall()
+
+
+def _significant(cur) -> list[tuple]:
+    """The candidates an edit actually changed, as (row..., overlap)."""
+    ready = []
+    for row in _candidates(cur):
+        feedback_id, original_draft, edited_response = row[0], row[1], row[2]
         if not original_draft or not edited_response:
             print(f"Skipping feedback {feedback_id}: empty original or edited draft")
             continue
-        
-        # Check if edits are substantial (more than just minor wording changes)
-        orig_words = set(original_draft.lower().split())
-        edit_words = set(edited_response.lower().split())
-        
-        # Jaccard similarity of word sets
-        intersection = orig_words & edit_words
-        union = orig_words | edit_words
-        
-        if not union:
-            significant_edit = True
-        else:
-            jaccard = len(intersection) / len(union)
-            # Significant if less than 70% overlap
-            significant_edit = jaccard < 0.7
-        
-        if not significant_edit:
-            print(f"Skipping feedback {feedback_id}: edit not significant (Jaccard={jaccard:.2f})")
+        significant, overlap = _is_significant_edit(original_draft, edited_response)
+        if not significant:
+            print(f"Skipping feedback {feedback_id}: edit not significant (overlap={overlap:.2f})")
             continue
-        
-        # Generate embeddings for the original and edited drafts
-        orig_embedding = embed_text(original_draft)
-        edit_embedding = embed_text(edited_response)
-        orig_emb_str = format_pg_array(orig_embedding)
-        edit_emb_str = format_pg_array(edit_embedding)
-        
-        # Create feedback chunk data - we'll store the edited version as the content
-        # with metadata indicating this is a feedback entry
-        feedback_hash = compute_content_hash(edited_response)
-        
-        # Check if a chunk with this content already exists (idempotency)
-        cur.execute("SELECT id, content FROM knowledge_chunks")
-        existing_chunks = {row[0]: row[1] for row in cur.fetchall()}
-        
-        already_exists = any(
-            compute_content_hash(existing) == feedback_hash 
-            for existing in existing_chunks.values()
-        )
-        
-        if already_exists:
-            print(f"Skipping feedback {feedback_id}: chunk already exists in knowledge_base")
-            continue
-        
-        # Create chunk metadata
-        chunk_id = str(uuid4())
-        meta = {
+        ready.append((*row, overlap))
+    return ready
+
+
+def _report_candidates(ready: list[tuple]) -> None:
+    """Show what could be promoted, so the operator approves from evidence."""
+    print(f"{len(ready)} significant edit(s) are available for promotion:")
+    for feedback_id, _original, edited, agent_id, _created, customer_id, overlap in ready:
+        preview = " ".join(edited.split())[:70]
+        print(f"  {feedback_id}  customer={customer_id}  agent={agent_id}  overlap={overlap:.2f}")
+        print(f"    {preview!r}")
+    print("\nRe-run with --approve <id> [...] to index exactly those entries.")
+
+
+def _prepare_chunk(row: tuple, approved_by: str, existing_hashes: set[str]) -> dict | None:
+    """Build the knowledge chunk for one approved feedback row, or None to skip."""
+    feedback_id, _original, edited_response, agent_id, created_at, customer_id, _overlap = row
+
+    content_hash = compute_content_hash(edited_response)
+    if content_hash in existing_hashes:
+        print(f"Skipping feedback {feedback_id}: chunk already exists in knowledge_base")
+        return None
+
+    source_id = f"feedback_{feedback_id}"
+    return {
+        "id": str(uuid4()),
+        "source_id": source_id,
+        "source_type": "feedback",
+        "content": edited_response,
+        "embedding": format_pg_array(embed_text(edited_response)),
+        "embedding_model": embedding_model_label(),
+        "meta": {
             "title": f"Feedback entry - Agent {agent_id}",
-            "source_id": f"feedback_{feedback_id}",
+            "source_id": source_id,
             "source_type": "feedback",
             "feedback_id": str(feedback_id),
-            "original_draft": original_draft[:100] if len(original_draft) > 100 else original_draft,
-            "edited_response": edited_response[:100] if len(edited_response) > 100 else edited_response,
-            "ingested_at": created_at.isoformat() if hasattr(created_at, 'isoformat') else str(created_at),
-        }
-        meta_json = json.dumps(meta)
-        
-        new_chunks.append({
-            "id": chunk_id,
-            "source_id": f"feedback_{feedback_id}",
-            "source_type": "feedback",
-            "content": edited_response,
-            "embedding": orig_emb_str,  # Use original embedding (or we could avg both)
-            "meta": meta,
-        })
-        print(f"Prepared feedback chunk: {feedback_id} (edit significant, {len(edited_response)} chars)")
-    
-    # Step 2: Insert new chunks into the database
-    if new_chunks:
-        with conn.cursor() as cur_insert:
-            for chunk in new_chunks:
-                meta_json = json.dumps(chunk["meta"])
-                
-                cur_insert.execute(
-                    """INSERT INTO knowledge_chunks (id, source_id, source_type, content, embedding, meta)
-                       VALUES (%s, %s, %s, %s, %s::vector, %s)""",
-                    (
-                        chunk["id"],
-                        chunk["source_id"],
-                        chunk["source_type"],
-                        chunk["content"],
-                        chunk["embedding"],
-                        meta_json,
-                    )
-                )
-            conn.commit()
-            print(f"Successfully inserted {len(new_chunks)} new feedback knowledge chunks")
-    else:
-        print("No new feedback chunks to insert - all significant edits already in knowledge base")
-    
-    # Step 3: Before/After retrieval quality check
-    print("\n--- Before/After Retrieval Quality Check ---")
-    
-    # Query: test retrieving tickets with specific intents
-    test_queries = [
-        "refund",
-        "shipping", 
-        "password",
-        "billing",
-    ]
-    
-    for query in test_queries:
+            # Retrieval serves a chunk only to the customer it came from.
+            "customer_id": customer_id,
+            "approved_by": approved_by,
+            "approved_at": datetime.now(timezone.utc).isoformat(),
+            "ingested_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+        },
+    }
+
+
+def _insert_chunks(conn, cur, chunks: list[dict]) -> None:
+    for chunk in chunks:
         cur.execute(
-            """SELECT id, source_id, content, embedding 
-               FROM knowledge_chunks 
-               WHERE content ILIKE %s 
+            """INSERT INTO knowledge_chunks
+                   (id, source_id, source_type, content, embedding, embedding_model, meta)
+               VALUES (%s, %s, %s, %s, %s::vector, %s, %s)""",
+            (
+                chunk["id"],
+                chunk["source_id"],
+                chunk["source_type"],
+                chunk["content"],
+                chunk["embedding"],
+                chunk["embedding_model"],
+                json.dumps(chunk["meta"]),
+            ),
+        )
+    conn.commit()
+    print(f"Successfully inserted {len(chunks)} approved feedback knowledge chunks")
+
+
+def _retrieval_check(cur) -> None:
+    """Report what each test query now matches, as a crude before/after view."""
+    print("\n--- Retrieval Quality Check ---")
+    for query in ["refund", "shipping", "password", "billing"]:
+        cur.execute(
+            """SELECT source_id, content
+               FROM knowledge_chunks
+               WHERE content ILIKE %s
                ORDER BY created_at DESC
                LIMIT 3""",
-            (f"%{query}%",)
+            (f"%{query}%",),
         )
         rows = cur.fetchall()
         print(f"Query '{query}': {len(rows)} matches found")
-        for row in rows:
-            print(f"  - {row[1]}: {row[2][:50] if row[2] else 'None'}...")
-    
-    # Step 4: Close connections
-    cur.close()
-    conn.close()
-    
+        for source_id, content in rows:
+            print(f"  - {source_id}: {(content or '')[:50]}...")
+
+
+def feedback_loop(approved_ids: list[str] | None = None, approved_by: str = "operator") -> None:
+    """Index the feedback rows the operator approved; never index anything else."""
+    approved = {str(identifier) for identifier in (approved_ids or [])}
+
+    conn = psycopg2.connect(settings.DATABASE_URL.replace("+psycopg", ""))
+    conn.autocommit = False
+    cur = conn.cursor()
+
+    try:
+        ready = _significant(cur)
+        print(f"Significant edits considered: {len(ready)}")
+
+        if not approved:
+            _report_candidates(ready)
+            print("\n--- Nothing indexed: no approval given ---")
+            return
+
+        unknown = approved - {str(row[0]) for row in ready}
+        if unknown:
+            print(f"Not promoting {sorted(unknown)}: no significant edit found for those ids")
+
+        cur.execute("SELECT content FROM knowledge_chunks")
+        existing_hashes = {compute_content_hash(row[0]) for row in cur.fetchall()}
+
+        chunks = []
+        for row in ready:
+            if str(row[0]) not in approved:
+                continue
+            chunk = _prepare_chunk(row, approved_by, existing_hashes)
+            if chunk is None:
+                continue
+            existing_hashes.add(compute_content_hash(chunk["content"]))
+            chunks.append(chunk)
+            print(f"Prepared feedback chunk {chunk['meta']['feedback_id']} "
+                  f"({len(chunk['content'])} chars, customer={chunk['meta']['customer_id']})")
+
+        if chunks:
+            _insert_chunks(conn, cur, chunks)
+        else:
+            print("No new feedback chunks to insert")
+
+        _retrieval_check(cur)
+    finally:
+        cur.close()
+        conn.close()
+
     print("\n--- Feedback Loop Complete ---")
 
 
-if __name__ == "__main__":
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Promote explicitly approved agent feedback into the knowledge base."
+    )
+    parser.add_argument("--approve", nargs="+", metavar="FEEDBACK_ID",
+                        help="feedback ids to promote; without this nothing is indexed")
+    parser.add_argument("--by", default="operator", help="who approved the promotion")
+    args = parser.parse_args()
+
     print("=" * 60)
-    print("ResolvAI Feedback Loop")
+    print("ResolveAI Feedback Loop")
     print("=" * 60)
     print("This script pulls agent corrections and feeds them back")
     print("into the knowledge base to improve future retrieval.")
     print()
-    feedback_loop()
+    feedback_loop(args.approve, args.by)
     print("=" * 60)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
