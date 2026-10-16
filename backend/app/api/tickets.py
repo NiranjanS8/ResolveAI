@@ -18,6 +18,7 @@ from app.schemas.ticket import (
     TicketDetailResponse,
     TicketMessageCreate,
     TicketMessageResponse,
+    EditDraftRequest,
     AgentFeedbackCreate,
     AgentFeedbackResponse,
     RefundAction,
@@ -377,7 +378,7 @@ async def approve_draft(
 @router.post("/{ticket_id}/edit", response_model=TicketResponse)
 async def edit_draft(
     ticket_id: str,
-    edited_draft: str,
+    payload: EditDraftRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """Agent edits the AI draft before sending."""
@@ -385,7 +386,8 @@ async def edit_draft(
     ticket = result.scalar_one_or_none()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
+    edited_draft = payload.edited_draft
     original_draft = ticket.draft_response or ""
     require_draft_review(ticket)
 

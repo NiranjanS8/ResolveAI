@@ -483,10 +483,10 @@ export async function approveDraft(ticketId: string): Promise<Ticket> {
 
 export async function editDraft(ticketId: string, editedDraft: string): Promise<Ticket> {
   try {
-    const url = new URL(`${API_BASE}/tickets/${ticketId}/edit`, window.location.origin);
-    url.searchParams.set('edited_draft', editedDraft);
-    const res = await fetch(url.toString(), {
+    const res = await fetch(`${API_BASE}/tickets/${ticketId}/edit`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ edited_draft: editedDraft }),
       signal: AbortSignal.timeout(4000),
     });
     if (res.ok) {

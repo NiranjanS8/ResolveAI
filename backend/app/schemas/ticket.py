@@ -32,6 +32,10 @@ class TicketMessageCreate(BaseModel):
     meta: Optional[dict] = None
 
 
+class EditDraftRequest(BaseModel):
+    edited_draft: str = Field(..., min_length=1, description="The agent's edited version of the AI draft")
+
+
 class TicketMessageResponse(BaseModel):
     id: UUID
     ticket_id: UUID
