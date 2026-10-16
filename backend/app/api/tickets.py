@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db
+from app.core.audit import log_audit_action
 from app.graphs import get_compiled_graph
 from app.graphs.state import TicketState
-from app.models.base import Ticket, TicketMessage, TicketStatus, AgentFeedback, AuditLog
+from app.models.base import Ticket, TicketMessage, TicketStatus, AgentFeedback
 from app.schemas.ticket import (
     TicketCreate,
     TicketResponse,
@@ -26,7 +27,6 @@ from app.schemas.ticket import (
     PasswordResetAction,
     EmailAction,
 )
-from app.db.session import SyncSessionLocal
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -83,29 +83,6 @@ def apply_graph_result(ticket: Ticket, result: dict) -> None:
         ticket.retrieved_context = result["retrieved_context"]
 
 
-def log_audit_action(
-    ticket_id,
-    action: str,
-    payload: dict,
-    confidence=None,
-    executed_by: str = "system",
-) -> None:
-    """Write an audit_log row via a sync session (used from synchronous graph code)."""
-    from sqlalchemy import insert as sa_insert
-    with SyncSessionLocal() as audit_db:
-        audit_db.execute(
-            sa_insert(AuditLog.__table__).values(
-                id=uuid4(),
-                ticket_id=ticket_id,
-                action=action,
-                payload=payload,
-                confidence=confidence,
-                executed_by=executed_by,
-            )
-        )
-        audit_db.commit()
-
-
 def _initial_state(ticket: Ticket) -> TicketState:
     return {
         "ticket_id": str(ticket.id),
@@ -117,6 +94,7 @@ def _initial_state(ticket: Ticket) -> TicketState:
         "urgency": ticket.urgency,
         "sentiment": ticket.sentiment,
         "confidence": ticket.confidence,
+        "routing_score": None,
         "retrieved_context": ticket.retrieved_context,
         "decision": None,
         "draft_response": None,

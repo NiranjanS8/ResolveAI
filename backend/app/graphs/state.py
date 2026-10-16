@@ -14,6 +14,7 @@ class TicketState(TypedDict):
     urgency: Optional[str]
     sentiment: Optional[str]
     confidence: Optional[str]
+    routing_score: Optional[str]
     retrieved_context: Optional[List[Dict[str, Any]]]
     decision: Optional[str]
     draft_response: Optional[str]

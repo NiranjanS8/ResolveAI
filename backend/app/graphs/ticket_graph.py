@@ -275,24 +275,57 @@ def decide_node(state: TicketState) -> TicketState:
         state.get("retrieved_context", []),
     )
     
-    # Build draft_response only for draft_for_review path
+    # A reply is produced for both branches: draft_for_review sends it only once
+    # a human approves, while auto_resolve sends it autonomously — and an
+    # autonomous action must leave both a message and an audit entry behind.
     draft_response = None
-    if decision == "draft_for_review":
+    if decision in ("draft_for_review", "auto_resolve"):
         try:
             draft_response = _generate_draft(state, intent)
         except Exception:
             draft_response = _fallback_draft(state, intent)
 
+    relevance = max(
+        (chunk.get("score", 0.0) for chunk in state.get("retrieved_context", [])),
+        default=0.0,
+    )
     return {
         **state,
         "decision": decision,
         "confidence": str(confidence),
+        "routing_score": f"{confidence * relevance:.4f}",
         "draft_response": draft_response,
         "status": "draft_for_review" if decision == "draft_for_review" else "deciding",
     }
 
 
 def auto_resolve_node(state: TicketState) -> TicketState:
+    """Autonomous resolution — replies and is therefore audit-logged.
+
+    The guardrail is that every autonomous action writes an audit_log entry, so
+    this node records the decision inputs (intent, classifier certainty,
+    retrieval relevance, final score) alongside the fact that a reply was sent.
+    """
+    from app.core.audit import log_audit_action
+
+    confidence = state.get("confidence")
+    relevance = max(
+        (chunk.get("score", 0.0) for chunk in state.get("retrieved_context", [])),
+        default=0.0,
+    )
+    log_audit_action(
+        state.get("ticket_id"),
+        "auto_resolved",
+        {
+            "intent": state.get("intent"),
+            "classifier_confidence": confidence,
+            "retrieval_relevance": round(relevance, 4),
+            "routing_score": state.get("routing_score"),
+            "reply_sent": bool(state.get("draft_response")),
+        },
+        confidence,
+        executed_by="ticket_graph.auto_resolve_node",
+    )
     return {
         **state,
         "status": "auto_resolved",
