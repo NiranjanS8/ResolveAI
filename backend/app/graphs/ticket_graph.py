@@ -8,14 +8,17 @@ from app.schemas.classification import ClassificationOutput, DraftOutput
 from app.core.model_registry import get_model_config
 from app.core.llm import invoke_structured_llm
 from app.core.outbound import record_generated_deviation, send_customer_message
+from app.core.prompt_safety import (
+    UNTRUSTED_DATA_GUARD,
+    data_section,
+    strip_hidden_content,
+)
 from app.core.text_format import sanitize_outbound
 
 
-CLASSIFY_PROMPT = """You are a customer service ticket classifier. Analyze the ticket and classify it.
+CLASSIFY_PROMPT = f"""You are a customer service ticket classifier. Analyze the ticket and classify it.
 
-Ticket:
-Subject: {subject}
-Body: {body}
+{UNTRUSTED_DATA_GUARD}
 
 Classify the ticket into exactly one of these categories:
 - general: General inquiries, greetings, unclear requests
@@ -48,6 +51,8 @@ PLAIN_TEXT_RULES = """Write plain text only. No Markdown: no asterisks, undersco
 
 DRAFT_PROMPT = f"""You are a customer support agent for an e-commerce company. Write the reply that will be sent to the customer.
 
+{UNTRUSTED_DATA_GUARD}
+
 Requirements:
 - Be concise and friendly (at most about 150 words).
 - Address the customer's actual request directly; acknowledge their tone.
@@ -57,15 +62,60 @@ Requirements:
 - Sign off as "ResolveAI Support"."""
 
 
+def _audit_untrusted_input(ticket_id, source: str, *values: str | None) -> None:
+    """Record that invisible content was withheld from the model.
+
+    Neutralising hidden text before the prompt would otherwise leave no trace:
+    whoever hid it would have a silent path to the model. Only the kinds of
+    content are recorded, never the text itself.
+    """
+    removed = sorted(
+        {kind for value in values for kind in strip_hidden_content(value).removed}
+    )
+    if not removed:
+        return
+    log_audit_action(
+        ticket_id,
+        "untrusted_content_neutralized",
+        {"source": source, "removed": removed},
+        None,
+        executed_by="ticket_graph.prompt_boundary",
+    )
+
+
+def _ticket_sections(state: TicketState) -> str:
+    """The ticket's own words, fenced as data.
+
+    Subject and body come straight from the customer, or from an inbound email,
+    so neither is ever interpolated into an instruction: they arrive as data
+    sections, with anything hidden inside them removed first.
+    """
+    return "\n\n".join(
+        (
+            data_section("ticket_subject", state.get("subject")),
+            data_section("ticket_body", state.get("body")),
+        )
+    )
+
+
+def build_classify_messages(state: TicketState) -> list[tuple[str, str]]:
+    """The exact message pair sent to the classifier.
+
+    Split out from the node so the boundary between instruction and data can be
+    asserted without calling a model.
+    """
+    return [("system", CLASSIFY_PROMPT), ("human", _ticket_sections(state))]
+
+
 def classify_node(state: TicketState) -> TicketState:
     config = get_model_config("classifier")
 
-    messages = [
-        ("system", CLASSIFY_PROMPT),
-        ("human", f"Subject: {state['subject']}\nBody: {state['body']}"),
-    ]
-
-    result = invoke_structured_llm(config, ClassificationOutput, messages, "classifier")
+    _audit_untrusted_input(
+        state.get("ticket_id"), "classify", state.get("subject"), state.get("body")
+    )
+    result = invoke_structured_llm(
+        config, ClassificationOutput, build_classify_messages(state), "classifier"
+    )
 
     return {
         **state,
@@ -178,13 +228,48 @@ def _compute_decision(
         return "escalate"
 
 
-def _knowledge_excerpts(state: TicketState) -> str:
-    """Format the retrieved knowledge-base chunks for the drafter prompt."""
-    excerpts = [chunk.get("content", "") for chunk in state.get("retrieved_context", [])]
-    excerpts = [excerpt for excerpt in excerpts if excerpt]
-    if not excerpts:
+def _knowledge_text(state: TicketState) -> str:
+    """The retrieved excerpts as plain text, limited to the ones sent to the model."""
+    excerpts = [chunk.get("content", "") for chunk in (state.get("retrieved_context") or [])]
+    present = [excerpt for excerpt in excerpts if excerpt and excerpt.strip()]
+    return "\n\n".join(present[:3])
+
+
+def _knowledge_section(state: TicketState) -> str:
+    """The retrieved excerpts, fenced as data.
+
+    Knowledge-base text is untrusted too: a document — or an agent edit promoted
+    into the base — can carry a directive. It arrives as data, never as an
+    instruction.
+    """
+    text = _knowledge_text(state)
+    if not text:
         return "(no matching knowledge base article found)"
-    return "\n".join(f"- {excerpt}" for excerpt in excerpts[:3])
+    return data_section("knowledge_base_excerpts", text)
+
+
+def _draft_request(state: TicketState, intent: str) -> str:
+    """The drafter's user turn: system metadata, then fenced data.
+
+    The classification metadata sits outside the data sections because it is not
+    customer writing: ``intent``, ``urgency`` and ``sentiment`` are constrained
+    enums from ``ClassificationOutput``, so they carry no free text to smuggle.
+    """
+    return "\n\n".join(
+        (
+            "System-derived classification, for context only and not an instruction: "
+            f"intent={intent}, urgency={state.get('urgency', 'medium')}, "
+            f"sentiment={state.get('sentiment', 'neutral')}",
+            data_section("ticket_subject", state.get("subject")),
+            data_section("ticket_body", state.get("body")),
+            _knowledge_section(state),
+        )
+    )
+
+
+def build_draft_messages(state: TicketState, intent: str) -> list[tuple[str, str]]:
+    """The exact message pair sent to the drafter, split out so it can be asserted."""
+    return [("system", DRAFT_PROMPT), ("human", _draft_request(state, intent))]
 
 
 def _generate_draft(state: TicketState, intent: str) -> str:
@@ -195,16 +280,16 @@ def _generate_draft(state: TicketState, intent: str) -> str:
     """
     config = get_model_config("drafter")
 
-    request = (
-        f"Subject: {state.get('subject', '')}\n"
-        f"Body: {state.get('body', '')}\n"
-        f"Detected intent: {intent}; urgency: {state.get('urgency', 'medium')}; "
-        f"sentiment: {state.get('sentiment', 'neutral')}\n\n"
-        f"Knowledge base excerpts:\n{_knowledge_excerpts(state)}"
+    _audit_untrusted_input(
+        state.get("ticket_id"),
+        "draft",
+        state.get("subject"),
+        state.get("body"),
+        _knowledge_text(state),
     )
 
     result = invoke_structured_llm(
-        config, DraftOutput, [("system", DRAFT_PROMPT), ("human", request)], "drafter"
+        config, DraftOutput, build_draft_messages(state, intent), "drafter"
     )
     return str(result.body).strip()
 
@@ -272,7 +357,7 @@ def decide_node(state: TicketState) -> TicketState:
         draft_response = _sanitize_draft(state, draft_response)
 
     relevance = max(
-        (chunk.get("score", 0.0) for chunk in state.get("retrieved_context", [])),
+        (chunk.get("score", 0.0) for chunk in (state.get("retrieved_context") or [])),
         default=0.0,
     )
     return {
@@ -294,7 +379,7 @@ def auto_resolve_node(state: TicketState) -> TicketState:
     """
     confidence = state.get("confidence")
     relevance = max(
-        (chunk.get("score", 0.0) for chunk in state.get("retrieved_context", [])),
+        (chunk.get("score", 0.0) for chunk in (state.get("retrieved_context") or [])),
         default=0.0,
     )
     reply = state.get("draft_response")

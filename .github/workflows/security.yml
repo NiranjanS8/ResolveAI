@@ -1,0 +1,30 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  prompt-injection:
+    name: Untrusted input and prompt injection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      # Offline mode: the boundary, the neutraliser and the routing guards are all
+      # assertions about this code, so the job needs no database and no API key.
+      # The live provider probe stays opt-in behind --live.
+      - name: Run the prompt-safety regression suite
+        working-directory: backend
+        run: python test_prompt_safety.py --offline
