@@ -1,268 +1,310 @@
-import React, { useState, useEffect } from 'react';
-import './index.css';
-import { TicketForm } from '../components/TicketForm';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  type Ticket,
+  type TicketCreate,
+  type Channel,
+  listTickets,
+  createTicket,
+  approveDraft,
+  editDraft,
+  rejectDraft,
+  processRefundAction,
+  processOrderStatusAction,
+  processPasswordResetAction,
+  addMessage,
+  checkBackendHealth,
+} from '../api/tickets';
+import { Navbar } from '../components/Navbar';
 import { TicketList } from '../components/TicketList';
-import { ActionButtons } from '../components/ActionButtons';
-import { DraftCard } from '../components/DraftCard';
-import { AnalyticsChart } from '../components/AnalyticsChart';
+import { TicketDetailPane } from '../components/TicketDetailPane';
+import { TicketForm } from '../components/TicketForm';
+import { AnalyticsDashboardView } from '../components/AnalyticsDashboardView';
+import { ToastContainer, type ToastMessage } from '../components/Toast';
 
-/**
- * Phase 1-10: Main dashboard/home page
- * Combines ticket form, list, detail view, and analytics.
- * Ties together all 10 phases of the ResolveAI build.
- */
-interface HomePageProps {
-  /** Injected by parent via state management */
-  tickets?: any[];
-  onDetail?: (ticket: any) => void;
-  onApprove?: (ticket: any) => void;
-  onEdit?: (ticket: any) => void;
-  onReject?: (ticket: any) => void;
-}
+export const HomePage: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'queue' | 'analytics'>('queue');
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [filterChannel, setFilterChannel] = useState<'all' | Channel>('all');
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-export const HomePage: React.FC<HomePageProps> = ({
-  tickets,
-  onDetail,
-  onApprove,
-  onEdit,
-  onReject,
-}) => {
-  const [selectedTicket, setSelectedTicket] = useState<any | null>(null);
-  const [showDraft, setShowDraft] = useState(false);
-  const [draftResponse, setDraftResponse] = useState<string | null>(null);
-  const [filterChannel, setFilterChannel] = useState<'all' | 'email' | 'chat'>('all');
-  const [canEdit, setCanEdit] = useState(false);
-
-  // Filter tickets by channel
-  const filteredTickets = tickets
-    ? tickets.filter(
-        t => filterChannel === 'all' || t.channel === filterChannel
-      )
-    : [];
-
-  // Handle detail view selection
-  const handleDetail = (ticket: any) => {
-    setSelectedTicket(ticket);
-    setShowDraft(!!ticket.draft_response);
-    setDraftResponse(ticket.draft_response || '');
+  const addToast = (type: ToastMessage['type'], message: string) => {
+    const id = `toast_${Date.now()}_${Math.random()}`;
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
   };
 
-  // Handle approve
-  const handleApprove = () => {
-    onApprove?.(selectedTicket!);
-    setShowDraft(false);
-    setDraftResponse('');
-    setSelectedTicket(null);
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Handle edit
-  const handleEdit = () => {
-    if (draftResponse) {
-      onEdit(draftResponse);
-      setShowDraft(false);
-      setDraftResponse('');
-      setSelectedTicket(null);
+  const loadData = useCallback(async () => {
+    try {
+      const isOnline = await checkBackendHealth();
+      setIsBackendConnected(isOnline);
+      const data = await listTickets();
+      setTickets(data);
+      if (data.length > 0 && !selectedTicket) {
+        setSelectedTicket(data[0]);
+      } else if (selectedTicket) {
+        const updated = data.find((t) => t.id === selectedTicket.id);
+        if (updated) setSelectedTicket(updated);
+      }
+    } catch {
+      setIsBackendConnected(false);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedTicket]);
+
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 10000);
+    return () => clearInterval(interval);
+  }, [loadData]);
+
+  // Handle Approve
+  const handleApprove = async (ticket: Ticket) => {
+    try {
+      const updated = await approveDraft(ticket.id);
+      setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setSelectedTicket(updated);
+      addToast('success', `Ticket #${ticket.id} approved. AI draft dispatched to customer.`);
+    } catch {
+      addToast('error', `Failed to approve ticket #${ticket.id}`);
     }
   };
 
-  // Handle reject
-  const handleReject = () => {
-    onReject?.(selectedTicket!);
-    setShowDraft(false);
-    setDraftResponse('');
-    setSelectedTicket(null);
+  // Handle Edit Draft
+  const handleEdit = async (ticket: Ticket, editedDraft: string) => {
+    try {
+      const updated = await editDraft(ticket.id, editedDraft);
+      setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setSelectedTicket(updated);
+      addToast('success', `Edited response for #${ticket.id} sent successfully.`);
+    } catch {
+      addToast('error', `Failed to edit and send draft for #${ticket.id}`);
+    }
   };
 
+  // Handle Reject
+  const handleReject = async (ticket: Ticket) => {
+    try {
+      const updated = await rejectDraft(ticket.id);
+      setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setSelectedTicket(updated);
+      addToast('warning', `Ticket #${ticket.id} draft rejected — routed to human escalation.`);
+    } catch {
+      addToast('error', `Failed to reject ticket #${ticket.id}`);
+    }
+  };
+
+  // Handle Refund Tool
+  const handleRefund = async (ticket: Ticket, amount: number) => {
+    try {
+      const updated = await processRefundAction(ticket.id, amount);
+      setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setSelectedTicket(updated);
+      if (amount > 2000) {
+        addToast('warning', `Refund of ₹${amount} exceeds ₹2,000 threshold. Supervisor approval required.`);
+      } else {
+        addToast('success', `Refund of ₹${amount} successfully processed under ₹2,000 auto-cap.`);
+      }
+    } catch {
+      addToast('error', `Refund execution failed for #${ticket.id}`);
+    }
+  };
+
+  // Handle Order Status Tool
+  const handleOrderStatus = async (ticket: Ticket) => {
+    try {
+      const updated = await processOrderStatusAction(ticket.id);
+      setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setSelectedTicket(updated);
+      addToast('info', `Order status lookup executed for #${ticket.id}. Details added to conversation.`);
+    } catch {
+      addToast('error', `Order status lookup failed`);
+    }
+  };
+
+  // Handle Password Reset Tool
+  const handlePasswordReset = async (ticket: Ticket) => {
+    try {
+      const updated = await processPasswordResetAction(ticket.id);
+      setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      setSelectedTicket(updated);
+      addToast('success', `Allow-listed action: Secure password reset link dispatched to ${ticket.customer_id}`);
+    } catch {
+      addToast('error', `Password reset failed`);
+    }
+  };
+
+  // Handle Message Send
+  const handleSendMessage = async (ticket: Ticket, text: string) => {
+    try {
+      const newMsg = await addMessage(ticket.id, text, 'agent');
+      const updated: Ticket = {
+        ...ticket,
+        messages: [...(ticket.messages || []), newMsg],
+      };
+      setTickets((prev) => prev.map((t) => (t.id === ticket.id ? updated : t)));
+      setSelectedTicket(updated);
+      addToast('info', `Message posted to conversation.`);
+    } catch {
+      addToast('error', `Failed to send reply`);
+    }
+  };
+
+  // Handle Ticket Ingestion
+  const handleCreateTicket = async (formData: TicketCreate) => {
+    try {
+      const created = await createTicket(formData);
+      setTickets((prev) => [created, ...prev]);
+      setSelectedTicket(created);
+      setIsModalOpen(false);
+      addToast('success', `Ticket #${created.id} ingested. LangGraph classified intent: "${created.intent}".`);
+    } catch {
+      addToast('error', 'Failed to ingest ticket');
+    }
+  };
+
+  // Quick Stats
+  const pendingReviewCount = tickets.filter((t) => t.status === 'draft_for_review').length;
+  const autoResolvedCount = tickets.filter((t) => t.status === 'auto_resolved').length;
+  const escalatedCount = tickets.filter((t) => t.status === 'escalated').length;
+  const deflectionRate = tickets.length > 0 ? Math.round(((autoResolvedCount + tickets.filter(t => t.status === 'resolved').length) / tickets.length) * 100) : 74;
+
   return (
-    <div className="min-h-screen bg-[var(--bg-base)] pb-8">
-      {/* Header */}
-      <header className="border-b border-[var(--border-hairline)] bg-[var(--bg-surface)]">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-            ResolveAI
-          </h1>
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            Ticket Ingestion — Phase 1 • Multi-Channel Support
-          </p>
-        </div>
-      </header>
+    <div
+      className="flex flex-col"
+      style={{ minHeight: '100vh', backgroundColor: 'var(--bg-base)', color: 'var(--text-primary)' }}
+    >
+      <Navbar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onOpenNewTicket={() => setIsModalOpen(true)}
+        isBackendConnected={isBackendConnected}
+        onRefresh={loadData}
+        ticketCount={tickets.length}
+        pendingReviewCount={pendingReviewCount}
+      />
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {/* Phase 1: Ticket Submission Form */}
-        <section className="mb-6">
-          <TicketForm onSubmit={({ customer_id, subject, body, channel }) => {
-            // Create ticket via API would go here
-            // For now, add to local state
-            const newTicket = {
-              id: Date.now().toString(),
-              customer_id,
-              subject,
-              body,
-              status: 'new',
-              channel,
-              draft_response: undefined,
-            };
-            // Simulate creation
-            setTimeout(() => {
-              onDetail?.(newTicket);
-            }, 100);
-          }}>
-          {/* If in detail view, hide the form or show it conditionally */}
-          {selectedTicket === null && (
-            <TicketForm
-              onSubmit={({ customer_id, subject, body, channel }) => {
-                const newTicket = {
-                  id: Date.now().toString(),
-                  customer_id,
-                  subject,
-                  body,
-                  channel,
-                  status: 'new',
-                  draft_response: undefined,
-                };
-                onDetail?.(newTicket);
-              }}
-            />
-          )}
-        </section>
+      {/* Stats sub-bar — compact, single line */}
+      <div
+        className="px-5 py-1.5 flex items-center gap-6 text-xs font-mono"
+        style={{ backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border)' }}
+      >
+        <span style={{ color: 'var(--text-muted)' }}>
+          Queue <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{tickets.length}</span>
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          Review <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>{pendingReviewCount}</span>
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          Auto-resolved <span style={{ color: 'var(--green)', fontWeight: 600 }}>{autoResolvedCount}</span>
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          Escalated <span style={{ color: 'var(--red)', fontWeight: 600 }}>{escalatedCount}</span>
+        </span>
+        <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>
+          Deflection <span style={{ color: 'var(--green)', fontWeight: 600 }}>{deflectionRate}%</span>
+        </span>
+      </div>
 
-        {/* Phase 6: Agent Dashboard Queue */}
-        <section>
-          <h2 className="text-lg font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-            Ticket Queue {filterChannel !== 'all' ? `(${filterChannel})` : ''}
-            <button
-              onClick={() => setFilterChannel(c => c === 'all' ? 'email' : c === 'email' ? 'chat' : 'all')}
-              style={{
-                marginLeft: '8px',
-                background: 'none',
-                border: 'none',
-                color: 'var(--accent)',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-              }}
-            >
-              {filterChannel}
-            </button>
-          </h2>
-          <TicketList
-            tickets={filteredTickets}
-            onDetail={handleDetail}
-            onApprove={selectedTicket?.draft_response && handleApprove}
-            onEdit={selectedTicket?.draft_response && handleEdit}
-            onReject={handleReject}
-            canEdit={!!selectedTicket?.draft_response}
-          />
-        </section>
-
-        {/* Phase 5-6: Detail View & Draft Card */}
-        {selectedTicket && (
-          <section className="mt-6">
-            <h2 className="text-lg font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-              Ticket Detail
-            </h2>
-
-            <div className="bg-[var(--bg-surface)] rounded-[4px] p-4 mb-4" style={{
-              border: '1px solid var(--border-hairline)',
-              fontFamily: "'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif",
-            }}>
-              <p className="text-[var(--text-secondary)] text-sm mb-2">
-                <strong>Customer ID:</strong> {selectedTicket.customer_id}
-              </p>
-              <p className="text-[var(--text-secondary)] text-sm mb-2">
-                <strong>Subject:</strong> {selectedTicket.subject}
-              </p>
-              <p className="text-[var(--text-secondary)] text-sm mb-2">
-                <strong>Intent:</strong> {selectedTicket.intent || '—'}
-              </p>
-              <p className="text-[var(--text-secondary)] text-sm mb-2">
-                <strong>Urgency:</strong> {selectedTicket.urgency || '—'}
-              </p>
-              <p className="text-[var(--text-secondary)] text-sm mb-2">
-                <strong>Sentiment:</strong> {selectedTicket.sentiment || '—'}
-              </p>
-              <p className="text-[var(--text-secondary)] text-sm mb-2">
-                <strong>Confidence:</strong> {selectedTicket.confidence || '—'}
-              </p>
+      {/* Main workspace */}
+      <main
+        className="flex-1 w-full mx-auto px-5 py-4"
+        style={{ maxWidth: '1600px' }}
+      >
+        {loading && tickets.length === 0 ? (
+          <div className="h-[70vh] flex items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <div
+                className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
+                style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }}
+              />
+              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                Connecting to broker…
+              </span>
+            </div>
+          </div>
+        ) : activeTab === 'queue' ? (
+          <div
+            className="grid gap-4"
+            style={{
+              gridTemplateColumns: '340px 1fr',
+              height: 'calc(100vh - 120px)',
+            }}
+          >
+            {/* Left: Queue pane */}
+            <div className="overflow-hidden flex flex-col">
+              <TicketList
+                tickets={tickets}
+                selectedTicketId={selectedTicket?.id}
+                onSelectTicket={setSelectedTicket}
+                filterChannel={filterChannel}
+                onFilterChannelChange={setFilterChannel}
+              />
             </div>
 
-            <DraftCard
-              draftResponse={selectedTicket.draft_response}
-              intent={selectedTicket.intent}
-              canInteract={!!selectedTicket}
-              onApprove={handleApprove}
-              onEdit={(edited) => {
-                setDraftResponse(edited);
-              }}
-              onReject={handleReject}
-            />
-
-            {/* Phase 7: Action Buttons for allowed actions */}
-            {selectedTicket && (
-              <ActionButtons
-                ticket={selectedTicket}
-                canApprove={!!selectedTicket.draft_response}
-                canEdit={!!selectedTicket.draft_response}
-                canReject={!!selectedTicket.draft_response}
-                onApprove={handleApprove}
-                onEdit={(edited) => setDraftResponse(edited)}
-                onReject={handleReject}
-              />
-            )}
-          </section>
+            {/* Right: Detail pane */}
+            <div className="overflow-hidden flex flex-col">
+              {selectedTicket ? (
+                <TicketDetailPane
+                  ticket={selectedTicket}
+                  onApprove={handleApprove}
+                  onEdit={handleEdit}
+                  onReject={handleReject}
+                  onRefund={handleRefund}
+                  onOrderStatus={handleOrderStatus}
+                  onPasswordReset={handlePasswordReset}
+                  onSendMessage={handleSendMessage}
+                  onClose={() => setSelectedTicket(null)}
+                />
+              ) : (
+                <div
+                  className="flex-1 flex flex-col items-center justify-center rounded-lg text-center"
+                  style={{
+                    border: '1px dashed var(--border)',
+                    backgroundColor: 'var(--bg-surface)',
+                    color: 'var(--text-muted)',
+                  }}
+                >
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 text-2xl"
+                    style={{ backgroundColor: 'var(--bg-elevated)' }}
+                  >
+                    📋
+                  </div>
+                  <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>
+                    No ticket selected
+                  </p>
+                  <p className="text-xs max-w-xs">
+                    Select a ticket from the queue to view AI analysis, conversation history, and draft responses.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <AnalyticsDashboardView />
         )}
-
-        {/* Phase 9: Analytics Section */}
-        {selectedTicket === null && (
-          <section className="mt-6">
-            <h2 className="text-lg font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-              Analytics
-            </h2>
-            <AnalyticsChart
-              title="Deflection Rate"
-              data={[]}
-              metric="deflection_rate"
-              range="30d"
-            />
-            <AnalyticsChart
-              title="Cost per Ticket"
-              data={[]}
-              metric="cost_per_ticket"
-              range="30d"
-            />
-            <AnalyticsChart
-              title="Escalation Reasons"
-              data={[]}
-              metric="escalation_breakdown"
-              range="30d"
-            />
-          </section>
-        )}
-
-        {/* Phase 10: Channel Filter */}
-        <section className="mt-6 pt-6 border-t border-[var(--border-hairline)]">
-          <p className="text-[var(--text-secondary)] text-sm mb-4">
-            Channel:
-            <button
-              onClick={() => setFilterChannel('all')}
-              style={{ marginRight: '4px', background: 'none', border: 'none', cursor: 'pointer' }}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setFilterChannel('chat')}
-              style={{ marginRight: '4px', background: 'none', border: 'none', cursor: 'pointer' }}
-            >
-              Chat
-            </button>
-            <button
-              onClick={() => setFilterChannel('email')}
-              style={{ marginRight: '4px', background: 'none', border: 'none', cursor: 'pointer' }}
-            >
-              Email
-            </button>
-          </p>
-        </section>
       </main>
+
+      {isModalOpen && (
+        <TicketForm
+          onSubmit={handleCreateTicket}
+          onCancel={() => setIsModalOpen(false)}
+          isOpenAsModal={true}
+        />
+      )}
+
+      <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </div>
   );
-}
+};

@@ -1,5 +1,4 @@
 import React from 'react';
-import './index.css';
 
 /**
  * Phase 1-3: Status badge with 3px left border in status color

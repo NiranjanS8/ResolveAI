@@ -10,6 +10,7 @@ function App() {
     customer_id: '',
     subject: '',
     body: '',
+    channel: 'chat',
   });
 
   const fetchTickets = async () => {
@@ -36,7 +37,7 @@ function App() {
     try {
       const newTicket = await createTicket(formData);
       setTickets([newTicket, ...tickets]);
-      setFormData({ customer_id: '', subject: '', body: '' });
+      setFormData({ customer_id: '', subject: '', body: '', channel: 'chat' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create ticket');
     } finally {
@@ -194,16 +195,16 @@ function App() {
             <table className="w-full" style={{fontFamily: "'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif"}}>
               <thead>
                 <tr className="bg-[var(--bg-surface-hover)]" style={{borderBottom: '1px solid var(--border-hairline)'}}>
-                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)", borderRight: '1px solid var(--border-hairline)'}>
+                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)", borderRight: '1px solid var(--border-hairline)'}}>
                     Status
                   </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)", borderRight: '1px solid var(--border-hairline)'}>
+                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)", borderRight: '1px solid var(--border-hairline)'}}>
                     Subject
                   </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)", borderRight: '1px solid var(--border-hairline)'}>
+                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)", borderRight: '1px solid var(--border-hairline)'}}>
                     Customer
                   </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)"}>
+                  <th className="px-4 py-3 text-left text-sm font-medium" style={{color: "var(--text-secondary)"}}>
                     Created
                   </th>
                 </tr>

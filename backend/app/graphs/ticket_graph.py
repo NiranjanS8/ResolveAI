@@ -78,28 +78,19 @@ def classify_node(state: TicketState) -> TicketState:
 
 
 def _embed_text(text: str, retriever_config) -> list[float] | None:
-    """Generate an embedding for the given text using the retriever model."""
-    from langchain_openai import ChatOpenAI
+    """Generate an embedding vector using the OpenAI embeddings API.
     
-    llm = create_llm(retriever_config)
-    messages = [("human", f"Generate an embedding for: {text}")]
-    
-    import time
-    start = time.perf_counter()
-    response = llm.invoke(messages)
-    latency_ms = int((time.perf_counter() - start) * 1000)
-    
-    embedding = None
-    if hasattr(response, 'embedding'):
-        embedding = response.embedding
-    elif isinstance(response, str):
-        try:
-            data = json.loads(response)
-            embedding = data.get('embedding') if isinstance(data, dict) else None
-        except Exception:
-            pass
-    
-    return embedding
+    Uses OpenAIEmbeddings (not ChatOpenAI) — embedding models do not accept
+    chat-style messages and require the dedicated embeddings endpoint.
+    """
+    try:
+        from langchain_openai import OpenAIEmbeddings
+        embeddings = OpenAIEmbeddings(
+            model=retriever_config.model,  # e.g. text-embedding-3-small
+        )
+        return embeddings.embed_query(text)
+    except Exception:
+        return None
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -120,32 +111,45 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 def retrieve_node(state: TicketState) -> TicketState:
     """Retrieve relevant knowledge base chunks for the ticket.
     
-    Embeds the ticket subject/body and performs top-k similarity search
-    against the knowledge_chunks table.
+    Embeds the ticket subject+body and performs top-k cosine similarity search
+    against the knowledge_chunks table using the pgvector <=> operator.
+    
+    Falls back gracefully if pgvector is unavailable or the table is empty.
     """
     from sqlalchemy import text as sq_text
     from app.db.session import sync_engine
-    
+
     retriever_config = get_model_config("retriever")
     query_text = f"{state['subject']} {state['body']}"
-    
-    # Generate embedding for the query
+
     embedding = _embed_text(query_text, retriever_config)
-    
+
     retrieved_context = []
     if embedding:
         try:
             with sync_engine.connect() as conn:
-                # Search for similar chunks using ILIKE (pgvector not required for MVP)
-                result = conn.execute(sq_text("""
-                    SELECT id, content, source_id, source_type 
-                    FROM knowledge_chunks 
-                    WHERE content ILIKE :query
-                    ORDER BY created_at DESC
-                    LIMIT 5
-                """), {"query": f"%{query_text.lower()}%"})
-                rows = result.fetchall()
-                for row in rows:
+                # Prefer pgvector cosine similarity; fall back to ILIKE if the
+                # embedding column or extension is not yet configured.
+                try:
+                    embedding_literal = json.dumps(embedding)
+                    result = conn.execute(sq_text("""
+                        SELECT id, content, source_id, source_type
+                        FROM knowledge_chunks
+                        ORDER BY embedding <=> CAST(:emb AS vector)
+                        LIMIT 5
+                    """), {"emb": embedding_literal})
+                except Exception:
+                    # TODO: enable pgvector extension and add embedding column to
+                    # knowledge_chunks to use real cosine similarity (Phase 4).
+                    result = conn.execute(sq_text("""
+                        SELECT id, content, source_id, source_type
+                        FROM knowledge_chunks
+                        WHERE content ILIKE :query
+                        ORDER BY created_at DESC
+                        LIMIT 5
+                    """), {"query": f"%{query_text[:80].lower()}%"})
+
+                for row in result.fetchall():
                     retrieved_context.append({
                         "id": str(row[0]),
                         "content": row[1],
@@ -154,7 +158,7 @@ def retrieve_node(state: TicketState) -> TicketState:
                     })
         except Exception:
             pass
-    
+
     return {
         **state,
         "retrieved_context": retrieved_context,

@@ -215,9 +215,12 @@ async def create_ticket(
     await db.commit()
     await db.refresh(ticket)
 
-    # Trigger graph run
+    # Trigger graph run in a thread pool — run_ticket_graph is synchronous and
+    # performs blocking LLM calls. Running it directly in this async route would
+    # block the FastAPI event loop for the full LLM round-trip (3–10s).
+    import asyncio
     try:
-        result = run_ticket_graph(ticket)
+        result = await asyncio.to_thread(run_ticket_graph, ticket)
         print(f"GRAPH RESULT: {result}")
         # Update ticket with graph results
         if result.get("intent"):
