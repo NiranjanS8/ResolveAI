@@ -21,7 +21,7 @@ from app.schemas.ticket import (
     PasswordResetAction,
     EmailAction,
 )
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, SyncSessionLocal
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -37,6 +37,47 @@ EMAIL_REQUIRED_FIELDS = {"subject", "body", "from_address"}
 
 # Phase 10: Security constants
 RATE_LIMIT_PER_MINUTE = 60  # Max tickets per minute per customer
+
+
+def apply_graph_result(ticket: Ticket, result: dict) -> None:
+    """Copy the relevant graph state fields back onto the ticket row."""
+    if result.get("intent"):
+        ticket.intent = result["intent"]
+    if result.get("urgency"):
+        ticket.urgency = result["urgency"]
+    if result.get("sentiment"):
+        ticket.sentiment = result["sentiment"]
+    if result.get("confidence"):
+        ticket.confidence = result["confidence"]
+    if result.get("status"):
+        ticket.status = TicketStatus(result["status"])
+    if result.get("draft_response") is not None:
+        ticket.draft_response = result["draft_response"]
+    if result.get("retrieved_context") is not None:
+        ticket.retrieved_context = result["retrieved_context"]
+
+
+def log_audit_action(
+    ticket_id,
+    action: str,
+    payload: dict,
+    confidence=None,
+    executed_by: str = "system",
+) -> None:
+    """Write an audit_log row via a sync session (used from synchronous graph code)."""
+    from sqlalchemy import insert as sa_insert
+    with SyncSessionLocal() as audit_db:
+        audit_db.execute(
+            sa_insert(AuditLog.__table__).values(
+                id=uuid4(),
+                ticket_id=ticket_id,
+                action=action,
+                payload=payload,
+                confidence=confidence,
+                executed_by=executed_by,
+            )
+        )
+        audit_db.commit()
 
 
 def run_ticket_graph(ticket: Ticket, agent_decision: str = None, edited_draft: str = None, action: str = None, action_amount: float = None) -> dict:
@@ -98,20 +139,7 @@ Please provide additional justification for the excess amount."""
                     }
                     initial_state["status"] = "auto_resolved"
                     initial_state["decision"] = "auto_resolve"
-                    # Log action to audit_log
-                    async with AsyncSessionLocal() as audit_db:
-                        from sqlalchemy import insert as sa_insert
-                        await audit_db.execute(
-                            sa_insert(AuditLog.__table__).values(
-                                id=uuid4(),
-                                ticket_id=ticket.id,
-                                action="refund_executed",
-                                payload=action_payload,
-                                confidence=ticket.confidence,
-                                executed_by="system",
-                            )
-                        )
-                        await audit_db.commit()
+                    log_audit_action(ticket.id, "refund_executed", action_payload, ticket.confidence)
             elif action == "order_status":
                 # Allow-listed action: order status lookup
                 action_payload = {
@@ -121,20 +149,7 @@ Please provide additional justification for the excess amount."""
                 }
                 initial_state["status"] = "auto_resolved"
                 initial_state["decision"] = "auto_resolve"
-                # Log action to audit_log
-                async with AsyncSessionLocal() as audit_db:
-                    from sqlalchemy import insert as sa_insert
-                    await audit_db.execute(
-                        sa_insert(AuditLog.__table__).values(
-                            id=uuid4(),
-                            ticket_id=ticket.id,
-                            action="order_status_checked",
-                            payload=action_payload,
-                            confidence=ticket.confidence,
-                            executed_by="system",
-                        )
-                    )
-                    await audit_db.commit()
+                log_audit_action(ticket.id, "order_status_checked", action_payload, ticket.confidence)
             elif action == "password_reset":
                 # Allow-listed action: password reset
                 action_payload = {
@@ -144,20 +159,7 @@ Please provide additional justification for the excess amount."""
                 }
                 initial_state["status"] = "auto_resolved"
                 initial_state["decision"] = "auto_resolve"
-                # Log action to audit_log
-                async with AsyncSessionLocal() as audit_db:
-                    from sqlalchemy import insert as sa_insert
-                    await audit_db.execute(
-                        sa_insert(AuditLog.__table__).values(
-                            id=uuid4(),
-                            ticket_id=ticket.id,
-                            action="password_reset_executed",
-                            payload=action_payload,
-                            confidence=ticket.confidence,
-                            executed_by="system",
-                        )
-                    )
-                    await audit_db.commit()
+                log_audit_action(ticket.id, "password_reset_executed", action_payload, ticket.confidence)
             
             # If guardrail violation for refund, don't execute action
             if guardrail_violation:
@@ -223,16 +225,7 @@ async def create_ticket(
         result = await asyncio.to_thread(run_ticket_graph, ticket)
         print(f"GRAPH RESULT: {result}")
         # Update ticket with graph results
-        if result.get("intent"):
-            ticket.intent = result["intent"]
-        if result.get("urgency"):
-            ticket.urgency = result["urgency"]
-        if result.get("sentiment"):
-            ticket.sentiment = result["sentiment"]
-        if result.get("confidence"):
-            ticket.confidence = result["confidence"]
-        if result.get("status"):
-            ticket.status = TicketStatus(result["status"])
+        apply_graph_result(ticket, result)
         await db.commit()
         await db.refresh(ticket)
     except Exception as e:
