@@ -136,6 +136,15 @@ def _state_after_run(graph, config: dict, fallback: dict) -> dict:
     return dict(fallback)
 
 
+def require_draft_review(ticket: Ticket) -> None:
+    """Ensure the ticket is actually paused awaiting a draft-review decision."""
+    if ticket.status != TicketStatus.DRAFT_FOR_REVIEW:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ticket is not awaiting draft review",
+        )
+
+
 def run_ticket_graph(ticket: Ticket) -> dict:
     """Run the graph for a new ticket.
 
@@ -338,6 +347,7 @@ async def approve_draft(
         raise HTTPException(status_code=404, detail="Ticket not found")
     
     original_draft = ticket.draft_response or ""
+    require_draft_review(ticket)
 
     # Resume the paused graph with the agent's approval
     result = await asyncio.to_thread(resume_ticket_graph, ticket, "approve")
@@ -376,6 +386,7 @@ async def edit_draft(
         raise HTTPException(status_code=404, detail="Ticket not found")
     
     original_draft = ticket.draft_response or ""
+    require_draft_review(ticket)
 
     # Resume the paused graph with the agent's edited response
     result = await asyncio.to_thread(resume_ticket_graph, ticket, "edit", edited_draft)
@@ -412,6 +423,8 @@ async def reject_draft(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     
+    require_draft_review(ticket)
+
     # Resume the paused graph with the agent's rejection
     result = await asyncio.to_thread(resume_ticket_graph, ticket, "reject")
     apply_graph_result(ticket, result)
