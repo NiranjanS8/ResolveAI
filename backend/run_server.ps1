@@ -1,2 +1,0 @@
-cd C:\Users\Niranjan\Desktop\AI-Projects\ResolveAI\backend
-python -c "import sys; import asyncio; import uvicorn; sys.platform == 'win32' and asyncio.set_event_loop(asyncio.SelectorEventLoop()); uvicorn.run('app.main:app', host='0.0.0.0', port=8000, log_level='debug', reload=False)"
