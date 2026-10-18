@@ -134,7 +134,7 @@ All settings live in the repository-root `.env`. Defaults are in `backend/app/co
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `postgresql+psycopg://resolveai:resolveai@localhost:5433/resolveai` | Postgres connection. |
+| `DATABASE_URL` | See `.env` example below | PostgreSQL connection. |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `GEMINI_API_KEY` | unset | Provider credentials. `GOOGLE_API_KEY` is accepted as a Gemini alias. |
 | `LLM_PROVIDER_ORDER` | unset | Comma-separated preference; otherwise the first configured key wins. |
 | `EMBEDDING_PROVIDER` | unset | Embedding provider. Changing it requires re-running ingestion. |
@@ -148,6 +148,12 @@ All settings live in the repository-root `.env`. Defaults are in `backend/app/co
 | `BACKEND_CORS_ORIGINS` | `localhost:3000`, `localhost:5173` | Allowed console origins. |
 | `SQL_ECHO` | `false` | SQL statement logging. |
 | `VITE_API_URL` | `http://localhost:8000/api/v1` | Frontend API base. |
+
+**`.env` default:**
+
+```env
+DATABASE_URL=postgresql+psycopg://resolveai:resolveai@localhost:5433/resolveai
+```
 
 ## Scripts
 
